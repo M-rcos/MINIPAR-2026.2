@@ -2,6 +2,7 @@
 
 Comandos disponíveis nesta etapa:
     tokens  <arquivo.mp> [--json]   mostra a tokenização
+    ast     <arquivo.mp> [--json]   mostra a árvore sintática (AST)
 
 Os demais comandos (ast, check, tac, cpp, build, run) serão adicionados
 conforme os componentes forem implementados.
@@ -15,6 +16,7 @@ import sys
 
 from . import __version__
 from .lexer import Lexer
+from .parser import Parser, format_tree, to_dict
 
 
 def _read(path: str) -> str:
@@ -47,6 +49,31 @@ def cmd_tokens(args: argparse.Namespace) -> int:
     return 1 if lexer.errors else 0
 
 
+def cmd_ast(args: argparse.Namespace) -> int:
+    source = _read(args.arquivo)
+    lexer = Lexer(source)
+    tokens = lexer.tokenize()
+    parser = Parser(tokens)
+    tree = parser.parse()
+    errors = list(lexer.errors) + list(parser.errors)
+    errors.sort(key=lambda e: (e.line, e.col))
+
+    if args.json:
+        print(json.dumps(
+            {"ast": to_dict(tree), "errors": [e.to_dict() for e in errors]},
+            ensure_ascii=False,
+            indent=2,
+        ))
+    else:
+        print(format_tree(tree))
+        for e in errors:
+            print(e.format(source), file=sys.stderr)
+        if errors:
+            print(f"\n{len(errors)} erro(s) encontrado(s).", file=sys.stderr)
+
+    return 1 if errors else 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="minipar", description=f"Compilador MiniPar {__version__}"
@@ -57,6 +84,11 @@ def main(argv=None) -> int:
     p_tok.add_argument("arquivo")
     p_tok.add_argument("--json", action="store_true", help="saída em JSON")
     p_tok.set_defaults(func=cmd_tokens)
+
+    p_ast = sub.add_parser("ast", help="mostra a árvore sintática do programa")
+    p_ast.add_argument("arquivo")
+    p_ast.add_argument("--json", action="store_true", help="saída em JSON")
+    p_ast.set_defaults(func=cmd_ast)
 
     args = parser.parse_args(argv)
     return args.func(args)

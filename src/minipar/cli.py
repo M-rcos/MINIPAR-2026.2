@@ -5,6 +5,8 @@ Comandos disponíveis nesta etapa:
     ast     <arquivo.mp> [--json]   mostra a árvore sintática (AST)
     check   <arquivo.mp> [--symbols] [--json]
                                     análise semântica (e tabela de símbolos)
+    tac     <arquivo.mp> [-o saida.tac] [--json]
+                                    código intermediário de três endereços
 
 Os demais comandos (ast, check, tac, cpp, build, run) serão adicionados
 conforme os componentes forem implementados.
@@ -20,6 +22,7 @@ from . import __version__
 from .lexer import Lexer
 from .parser import Parser, format_tree, to_dict
 from .semantic import SemanticAnalyzer
+from .tac import TACGenerator
 
 
 def _read(path: str) -> str:
@@ -115,6 +118,43 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 1 if errors else 0
 
 
+def _front_end(source: str):
+    """Léxico, sintático e semântico. Devolve (arvore, analisador, erros)."""
+    lexer = Lexer(source)
+    tokens = lexer.tokenize()
+    parser = Parser(tokens)
+    tree = parser.parse()
+    errors = sorted(list(lexer.errors) + list(parser.errors), key=lambda e: (e.line, e.col))
+    if errors:
+        return tree, None, errors
+    analyzer = SemanticAnalyzer()
+    analyzer.analyze(tree)
+    return tree, analyzer, sorted(analyzer.errors, key=lambda e: (e.line, e.col))
+
+
+def cmd_tac(args: argparse.Namespace) -> int:
+    source = _read(args.arquivo)
+    tree, analyzer, errors = _front_end(source)
+    if errors:
+        for e in errors:
+            print(e.format(source), file=sys.stderr)
+        print(f"\n{len(errors)} erro(s): corrija-os antes de gerar o código intermediário.",
+              file=sys.stderr)
+        return 1
+    program = TACGenerator(analyzer).generate(tree)
+    if args.json:
+        text = json.dumps(program.to_dict(), ensure_ascii=False, indent=2)
+    else:
+        text = program.format()
+    if args.saida:
+        with open(args.saida, "w", encoding="utf-8") as f:
+            f.write(text)
+        print(f"Código intermediário gravado em {args.saida}")
+    else:
+        print(text, end="" if text.endswith("\n") else "\n")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="minipar", description=f"Compilador MiniPar {__version__}"
@@ -136,6 +176,12 @@ def main(argv=None) -> int:
     p_chk.add_argument("--symbols", action="store_true", help="mostra a tabela de símbolos")
     p_chk.add_argument("--json", action="store_true", help="saída em JSON")
     p_chk.set_defaults(func=cmd_check)
+
+    p_tac = sub.add_parser("tac", help="gera o código de três endereços")
+    p_tac.add_argument("arquivo")
+    p_tac.add_argument("-o", "--saida", help="grava o resultado neste arquivo")
+    p_tac.add_argument("--json", action="store_true", help="saída em JSON")
+    p_tac.set_defaults(func=cmd_tac)
 
     args = parser.parse_args(argv)
     return args.func(args)

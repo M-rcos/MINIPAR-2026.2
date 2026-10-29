@@ -2,7 +2,7 @@
 PY ?= python3
 export PYTHONPATH := src
 
-.PHONY: test tokens ast check clean
+.PHONY: test tokens ast check tac clean
 
 test:
 	$(PY) -m unittest discover -s tests -v
@@ -18,6 +18,10 @@ ast:
 # uso: make check F=exemplos/teste03_neuronio.mp   (mostra também a tabela de símbolos)
 check:
 	$(PY) -m minipar check $(F) --symbols
+
+# uso: make tac F=exemplos/teste07_quicksort_iterativo.mp
+tac:
+	$(PY) -m minipar tac $(F)
 
 clean:
 	find . -name "__pycache__" -type d -prune -exec rm -rf {} +

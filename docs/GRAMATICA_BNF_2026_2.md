@@ -220,16 +220,20 @@ ampliada para atender aos Programas de Teste 1 a 11 da versão 2026.2.
 
 | Função | Descrição | Usada em |
 |---|---|---|
-| `len(x)` | tamanho de lista ou string | 4, 5, 6, 7, 11 |
+| `len(x)` | tamanho de lista, string ou matriz | 4, 5, 6, 7, 11 |
 | `range(n)`, `range(a, b)` | lista de inteiros | 4, 5 |
-| `to_number(s)`, `to_int(x)`, `to_string(x)` | conversões | 1, 6, 11 |
+| `to_number(x)`, `to_int(x)`, `to_string(x)` | conversões | 1, 6, 11 |
 | `parse_ints(s)` | lê inteiros separados por espaço | 6 |
-| `exp(x)`, `random()`, `sqrt(x)`, `abs(x)` | matemática | 4, 5, 9 |
-| `fmt(x, casas)` | número com N casas decimais (`peso:.4f`) | 3, 4 |
+| `exp(x)`, `sqrt(x)`, `abs(x)`, `floor(x)`, `pow(a, b)`, `max(a, b)`, `min(a, b)` | matemática | 4, 5, 9 |
+| `random()` | número aleatório entre 0 e 1 | 4 |
+| `fmt(x, casas)` | número como string com N casas decimais (`peso:.4f`) | 3, 4 |
 | `is_digit(s)`, `is_alpha(s)` | classificação de caractere | 11 |
+| `substr(s, inicio, tamanho)`, `split(s, separador)` | manipulação de strings | 6, 11 |
 | `clock()` | tempo em segundos (benchmark) | 8, 9, 10 |
 | `sleep(s)` | pausa em segundos | 2 |
-| `lista.append(v)`, `lista.pop()`, `lista.size()` | métodos de lista | 6, 7, 11 |
+
+Métodos nativos: `lista.append(v)`, `lista.push_back(v)`, `lista.pop()`, `lista.size()`,
+`string.size()`, `canal.send(a, ...)`, `canal.receive()`, `canal.close()`.
 
 ## 7. Decisões que vale confirmar com o professor
 

@@ -246,6 +246,12 @@ class TestNativas(unittest.TestCase):
         self.assertTrue(any("indexado" in m for m in msgs("var n = 1; var a = n[0];")))
         self.assertTrue(any("imutáveis" in m for m in msgs('var s = "a"; s[0] = "b";')))
 
+    def test_trim_seed_e_write_file(self):
+        ok('var a = trim("  oi "); seed(42); write_file("saida.txt", a);')
+        self.assertTrue(any("espera 1" in m for m in msgs("var a = trim();")))
+        self.assertTrue(any("argumento 1" in m for m in msgs("seed(\"x\");")))
+        self.assertTrue(any("espera 2" in m for m in msgs('write_file("a");')))
+
     def test_input_devolve_string(self):
         a = ok('var s = input("nome: "); var n = to_number(input());')
         self.assertEqual(a.symbol_table.resolve("s").type, "string")

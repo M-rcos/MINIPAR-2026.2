@@ -589,11 +589,25 @@ inline Value bi_min(const Value& a, const Value& b) {
     return Value(std::min(need_num(a, "min"), need_num(b, "min")));
 }
 
-inline Value bi_random() {
-    static std::mutex m;
+inline std::mt19937_64& rng() {
     static std::mt19937_64 gen{std::random_device{}()};
-    std::lock_guard<std::mutex> lock(m);
-    return Value(std::uniform_real_distribution<double>(0.0, 1.0)(gen));
+    return gen;
+}
+inline std::mutex& rng_mutex() {
+    static std::mutex m;
+    return m;
+}
+
+inline Value bi_random() {
+    std::lock_guard<std::mutex> lock(rng_mutex());
+    return Value(std::uniform_real_distribution<double>(0.0, 1.0)(rng()));
+}
+
+// Fixa a semente do gerador aleatório (execuções reproduzíveis).
+inline Value bi_seed(const Value& s) {
+    std::lock_guard<std::mutex> lock(rng_mutex());
+    rng().seed(static_cast<uint64_t>(need_num(s, "seed")));
+    return Value();
 }
 
 inline Value bi_fmt(const Value& x, const Value& digits) {
@@ -616,6 +630,24 @@ inline Value bi_is_alpha(const Value& v) {
     for (unsigned char c : s)
         if (!std::isalpha(c)) return Value(false);
     return Value(true);
+}
+
+inline Value bi_trim(const Value& v) {
+    const std::string& s = need_str(v, "trim");
+    size_t a = 0, b = s.size();
+    while (a < b && std::isspace(static_cast<unsigned char>(s[a]))) ++a;
+    while (b > a && std::isspace(static_cast<unsigned char>(s[b - 1]))) --b;
+    return Value(s.substr(a, b - a));
+}
+
+inline Value bi_write_file(const Value& path, const Value& text) {
+    const std::string& p = need_str(path, "write_file");
+    const std::string& t = need_str(text, "write_file");
+    FILE* f = std::fopen(p.c_str(), "wb");
+    if (f == nullptr) fail("Não foi possível abrir '" + p + "' para escrita");
+    std::fwrite(t.data(), 1, t.size(), f);
+    std::fclose(f);
+    return Value();
 }
 
 inline Value bi_substr(const Value& v, const Value& start, const Value& len) {

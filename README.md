@@ -46,6 +46,6 @@ Windows: instale o Python 3 e o MSYS2 (https://www.msys2.org), depois
 - [x] Etapa 3: tabela de símbolos e analisador semântico
 - [x] Etapa 4: código de 3 endereços
 - [x] Etapa 5: gerador C++ e integração com GCC
-- [ ] Etapa 6: testes 4, 5, 6 e 11 (redes neurais, quicksort recursivo, minicompilador)
+- [x] Etapa 6: testes 4, 5, 6 e 11 (redes neurais, quicksort recursivo, minicompilador); ver docs/PROGRAMAS_DE_TESTE.md
 - [ ] Etapa 7: canais com sockets (Teste 1) e par em computadores diferentes
 - [ ] Etapa 8: fork/join em núcleos e em outro computador (Testes 8, 9 e 10)

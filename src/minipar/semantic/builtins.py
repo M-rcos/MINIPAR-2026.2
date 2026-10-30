@@ -31,6 +31,9 @@ FUNCTIONS = {
     "is_alpha":   (1, 1, BOOL,   [frozenset({STRING})]),
     "substr":     (3, 3, STRING, [frozenset({STRING}), frozenset({NUMBER}), frozenset({NUMBER})]),
     "split":      (2, 2, LIST,   [frozenset({STRING}), frozenset({STRING})]),
+    "trim":       (1, 1, STRING, [frozenset({STRING})]),
+    "seed":       (1, 1, VOID,   [frozenset({NUMBER})]),
+    "write_file": (2, 2, VOID,   [frozenset({STRING}), frozenset({STRING})]),
     "clock":      (0, 0, NUMBER, []),
     "sleep":      (1, 1, VOID,   [frozenset({NUMBER})]),
 }

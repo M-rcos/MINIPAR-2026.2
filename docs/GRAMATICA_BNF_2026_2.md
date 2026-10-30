@@ -228,7 +228,9 @@ ampliada para atender aos Programas de Teste 1 a 11 da versão 2026.2.
 | `random()` | número aleatório entre 0 e 1 | 4 |
 | `fmt(x, casas)` | número como string com N casas decimais (`peso:.4f`) | 3, 4 |
 | `is_digit(s)`, `is_alpha(s)` | classificação de caractere | 11 |
-| `substr(s, inicio, tamanho)`, `split(s, separador)` | manipulação de strings | 6, 11 |
+| `substr(s, inicio, tamanho)`, `split(s, separador)`, `trim(s)` | manipulação de strings | 6, 11 |
+| `seed(n)` | fixa a semente do gerador aleatório | 4 |
+| `write_file(caminho, texto)` | grava um texto em arquivo | 11 |
 | `clock()` | tempo em segundos (benchmark) | 8, 9, 10 |
 | `sleep(s)` | pausa em segundos | 2 |
 

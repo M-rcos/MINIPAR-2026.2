@@ -30,7 +30,7 @@ _TEMP = re.compile(r"^t\d+$")
 BUILTINS = {
     "len", "range", "to_number", "to_int", "to_string", "parse_ints", "exp", "sqrt",
     "abs", "floor", "pow", "max", "min", "random", "fmt", "is_digit", "is_alpha",
-    "substr", "split", "clock", "sleep",
+    "substr", "split", "clock", "sleep", "trim", "seed", "write_file",
 }
 
 _BIN = {"+": "add", "-": "sub", "*": "mul", "/": "div", "%": "mod"}

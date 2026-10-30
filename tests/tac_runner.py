@@ -187,6 +187,8 @@ class TACRunner:
             "substr": lambda: a[0][int(a[1]):int(a[1]) + int(a[2])],
             "split": lambda: a[0].split(a[1]),
             "parse_ints": lambda: [int(x) for x in a[0].split()],
+            "trim": lambda: a[0].strip(), "seed": lambda: None,
+            "write_file": lambda: None,
             "sleep": lambda: None, "clock": lambda: 0.0, "random": lambda: 0.5,
         }
         if name not in f:

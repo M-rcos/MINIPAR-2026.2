@@ -7,6 +7,9 @@ Comandos disponíveis nesta etapa:
                                     análise semântica (e tabela de símbolos)
     tac     <arquivo.mp> [-o saida.tac] [--json]
                                     código intermediário de três endereços
+    cpp     <arquivo.mp> [-o saida.cpp]     gera o código C++
+    build   <arquivo.mp> [-o exe] [-O2]     compila até o executável (GCC)
+    run     <arquivo.mp> [-O2]              compila e executa
 
 Os demais comandos (ast, check, tac, cpp, build, run) serão adicionados
 conforme os componentes forem implementados.
@@ -22,6 +25,7 @@ from . import __version__
 from .lexer import Lexer
 from .parser import Parser, format_tree, to_dict
 from .semantic import SemanticAnalyzer
+from .pipeline import CompileErrors, front_end
 from .tac import TACGenerator
 
 
@@ -118,23 +122,9 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 1 if errors else 0
 
 
-def _front_end(source: str):
-    """Léxico, sintático e semântico. Devolve (arvore, analisador, erros)."""
-    lexer = Lexer(source)
-    tokens = lexer.tokenize()
-    parser = Parser(tokens)
-    tree = parser.parse()
-    errors = sorted(list(lexer.errors) + list(parser.errors), key=lambda e: (e.line, e.col))
-    if errors:
-        return tree, None, errors
-    analyzer = SemanticAnalyzer()
-    analyzer.analyze(tree)
-    return tree, analyzer, sorted(analyzer.errors, key=lambda e: (e.line, e.col))
-
-
 def cmd_tac(args: argparse.Namespace) -> int:
     source = _read(args.arquivo)
-    tree, analyzer, errors = _front_end(source)
+    tree, analyzer, errors = front_end(source)
     if errors:
         for e in errors:
             print(e.format(source), file=sys.stderr)
@@ -153,6 +143,56 @@ def cmd_tac(args: argparse.Namespace) -> int:
     else:
         print(text, end="" if text.endswith("\n") else "\n")
     return 0
+
+
+def _build(args: argparse.Namespace):
+    from .codegen import BuildError, build_executable
+    try:
+        return build_executable(args.arquivo, out_dir=args.dir, opt=args.opt,
+                                exe_name=getattr(args, "saida", None))
+    except CompileErrors as err:
+        print(err.format(), file=sys.stderr)
+        print(f"\n{len(err.errors)} erro(s): corrija-os antes de compilar.", file=sys.stderr)
+    except BuildError as err:
+        print(err, file=sys.stderr)
+    return None
+
+
+def cmd_cpp(args: argparse.Namespace) -> int:
+    from .pipeline import to_cpp
+    source = _read(args.arquivo)
+    try:
+        code = to_cpp(source)
+    except CompileErrors as err:
+        print(err.format(), file=sys.stderr)
+        print(f"\n{len(err.errors)} erro(s): corrija-os antes de gerar o C++.", file=sys.stderr)
+        return 1
+    if args.saida:
+        with open(args.saida, "w", encoding="utf-8") as f:
+            f.write(code)
+        print(f"Código C++ gravado em {args.saida}")
+    else:
+        print(code, end="")
+    return 0
+
+
+def cmd_build(args: argparse.Namespace) -> int:
+    result = _build(args)
+    if result is None:
+        return 1
+    print(f"C++ gerado:  {result.cpp_path}")
+    print(f"Executável:  {result.exe_path}")
+    if result.compiler_output.strip():
+        print(result.compiler_output, file=sys.stderr)
+    return 0
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    import subprocess
+    result = _build(args)
+    if result is None:
+        return 1
+    return subprocess.call([str(result.exe_path.resolve())])
 
 
 def main(argv=None) -> int:
@@ -182,6 +222,22 @@ def main(argv=None) -> int:
     p_tac.add_argument("-o", "--saida", help="grava o resultado neste arquivo")
     p_tac.add_argument("--json", action="store_true", help="saída em JSON")
     p_tac.set_defaults(func=cmd_tac)
+
+    p_cpp = sub.add_parser("cpp", help="gera o código C++")
+    p_cpp.add_argument("arquivo")
+    p_cpp.add_argument("-o", "--saida", help="grava o C++ neste arquivo")
+    p_cpp.set_defaults(func=cmd_cpp)
+
+    for name, func, helptext in (("build", cmd_build, "compila até o executável"),
+                                 ("run", cmd_run, "compila e executa")):
+        p = sub.add_parser(name, help=helptext)
+        p.add_argument("arquivo")
+        if name == "build":
+            p.add_argument("-o", "--saida", help="caminho do executável")
+        p.add_argument("-O", dest="opt", default="2", choices=["0", "1", "2", "3", "s"],
+                       help="nível de otimização do GCC (padrão: 2)")
+        p.add_argument("--dir", default="build", help="pasta de saída (padrão: build)")
+        p.set_defaults(func=func)
 
     args = parser.parse_args(argv)
     return args.func(args)

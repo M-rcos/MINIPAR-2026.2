@@ -359,8 +359,8 @@ class CppGenerator(ICodeGenerator):
         return out
 
     def _main(self, program: TACProgram) -> List[str]:
-        out = ["int main() {"]
-        out.append("    return mp::run_program([]() {")
+        out = ["int main(int argc, char** argv) {"]
+        out.append("    return mp::run_program(argc, argv, []() {")
         out.append("        register_classes();")
         for name, a, b in program.channels:
             out.append(f"        {var_name(name)} = mp::make_channel({cstring(name)}, "

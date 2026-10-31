@@ -66,7 +66,7 @@ def build_executable(source_path: str, out_dir: str = "build", opt: str = "2",
     cmd = [find_compiler(), "-std=c++17", f"-O{opt}", "-pthread", "-I", str(out),
            "-o", str(exe_path), str(cpp_path)]
     if is_windows:
-        cmd += ["-static"]
+        cmd += ["-static", "-lws2_32"]
     cmd += list(extra_flags)
 
     proc = subprocess.run(cmd, capture_output=True, text=True)

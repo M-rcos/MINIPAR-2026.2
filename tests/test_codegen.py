@@ -48,7 +48,7 @@ class TestGeracaoDeTexto(unittest.TestCase):
         self.assertIn("static mp::Value v_g;", cpp)
         self.assertIn("mp::Value fn_f(mp::Value v_a)", cpp)
         self.assertIn("mp::print({", cpp)
-        self.assertIn("int main()", cpp)
+        self.assertIn("int main(int argc, char** argv)", cpp)
 
     def test_labels_nao_usados_nao_sao_emitidos(self):
         cpp = to_cpp("var i = 0; while (i < 3) { i += 1; }")

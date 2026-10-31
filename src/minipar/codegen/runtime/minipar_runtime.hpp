@@ -27,14 +27,32 @@
 #include <unordered_map>
 #include <vector>
 
+#include <cctype>
+#include <cerrno>
+#include <cstring>
+#include <fstream>
+
 #ifdef _WIN32
 #  ifndef NOMINMAX
 #    define NOMINMAX
 #  endif
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
 #  include <windows.h>
-#elif defined(__linux__)
-#  include <pthread.h>
-#  include <sched.h>
+#else
+#  include <arpa/inet.h>
+#  include <netdb.h>
+#  include <netinet/in.h>
+#  include <netinet/tcp.h>
+#  include <signal.h>
+#  include <sys/select.h>
+#  include <sys/socket.h>
+#  include <sys/types.h>
+#  include <unistd.h>
+#  ifdef __linux__
+#    include <pthread.h>
+#    include <sched.h>
+#  endif
 #endif
 
 namespace mp {
@@ -51,6 +69,11 @@ struct RuntimeError : std::runtime_error {
 inline std::atomic<bool>& failed_flag() {
     static std::atomic<bool> f{false};
     return f;
+}
+
+inline std::mutex& io_mutex() {
+    static std::mutex m;
+    return m;
 }
 
 struct List;
@@ -419,15 +442,311 @@ inline void check_arity(const char* what, const Args& a, size_t expected) {
 }
 
 // ----------------------------------------------------------------------------
-// Canais de comunicação (implementação real com sockets: Etapa 7)
+// Configuração de execução (--node, --hosts) e endereços dos computadores
+// ----------------------------------------------------------------------------
+struct Config {
+    std::string node;                                // quem é este programa (ex.: computador_1)
+    std::map<std::string, std::string> hosts;        // computador -> endereço
+    std::map<std::string, int> ports;                // canal -> porta
+    double timeout = 120.0;                          // segundos para conectar/aguardar
+};
+
+inline Config& config() {
+    static Config c;
+    return c;
+}
+
+inline std::string trim_str(const std::string& s) {
+    size_t a = 0, b = s.size();
+    while (a < b && std::isspace(static_cast<unsigned char>(s[a]))) ++a;
+    while (b > a && std::isspace(static_cast<unsigned char>(s[b - 1]))) --b;
+    return s.substr(a, b - a);
+}
+
+// Formato do arquivo (minipar.hosts):
+//   # comentário
+//   computador_1 = 127.0.0.1
+//   computador_2 = 192.168.0.20
+//   port.calculadora = 7000        (porta do canal "calculadora", opcional)
+inline void load_hosts_file(const std::string& path, bool required) {
+    std::ifstream f(path);
+    if (!f) {
+        if (required) fail("Não foi possível abrir o arquivo de computadores: " + path);
+        return;
+    }
+    std::string line;
+    int n = 0;
+    while (std::getline(f, line)) {
+        ++n;
+        size_t hash = line.find('#');
+        if (hash != std::string::npos) line.erase(hash);
+        line = trim_str(line);
+        if (line.empty()) continue;
+        size_t eq = line.find('=');
+        if (eq == std::string::npos)
+            fail(path + ":" + std::to_string(n) + ": esperava 'nome = valor'");
+        std::string key = trim_str(line.substr(0, eq));
+        std::string val = trim_str(line.substr(eq + 1));
+        if (key.rfind("port.", 0) == 0) {
+            char* end = nullptr;
+            long port = std::strtol(val.c_str(), &end, 10);
+            if (val.empty() || *end != '\0' || port < 1 || port > 65535)
+                fail(path + ":" + std::to_string(n) + ": porta inválida '" + val + "'");
+            config().ports[key.substr(5)] = static_cast<int>(port);
+        } else {
+            config().hosts[key] = val;
+        }
+    }
+}
+
+inline int default_port(const std::string& channel) {
+    uint32_t h = 2166136261u;                         // FNV-1a: o mesmo valor em todos os computadores
+    for (unsigned char c : channel) { h ^= c; h *= 16777619u; }
+    return 20000 + static_cast<int>(h % 20000u);
+}
+
+inline int port_of(const std::string& channel) {
+    auto it = config().ports.find(channel);
+    return it != config().ports.end() ? it->second : default_port(channel);
+}
+
+inline std::string host_of(const std::string& endpoint) {
+    auto it = config().hosts.find(endpoint);
+    return it != config().hosts.end() ? it->second : "127.0.0.1";
+}
+
+// ----------------------------------------------------------------------------
+// Sockets TCP (POSIX e Winsock)
+// ----------------------------------------------------------------------------
+#ifdef _WIN32
+using sock_t = SOCKET;
+inline const sock_t BAD_SOCK = INVALID_SOCKET;
+inline void close_socket(sock_t s) { closesocket(s); }
+#else
+using sock_t = int;
+constexpr sock_t BAD_SOCK = -1;
+inline void close_socket(sock_t s) { ::close(s); }
+#endif
+#ifndef MSG_NOSIGNAL
+#  define MSG_NOSIGNAL 0
+#endif
+
+inline void net_init() {
+#ifdef _WIN32
+    static bool done = []() { WSADATA d; WSAStartup(MAKEWORD(2, 2), &d); return true; }();
+#else
+    static bool done = []() { signal(SIGPIPE, SIG_IGN); return true; }();
+#endif
+    (void)done;
+}
+
+inline void net_log(const std::string& msg) {
+    std::lock_guard<std::mutex> lock(io_mutex());
+    std::fprintf(stderr, "[rede] %s\n", msg.c_str());
+}
+
+inline void set_nodelay(sock_t s) {
+    int yes = 1;
+    setsockopt(s, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&yes), sizeof yes);
+}
+
+// Conecta com novas tentativas (a ordem de início dos programas não importa).
+inline sock_t tcp_connect(const std::string& host, int port, double timeout) {
+    net_init();
+    auto start = std::chrono::steady_clock::now();
+    bool warned = false;
+    while (true) {
+        addrinfo hints;
+        std::memset(&hints, 0, sizeof hints);
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
+        addrinfo* res = nullptr;
+        std::string service = std::to_string(port);
+        if (getaddrinfo(host.c_str(), service.c_str(), &hints, &res) == 0) {
+            for (addrinfo* p = res; p != nullptr; p = p->ai_next) {
+                sock_t s = ::socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+                if (s == BAD_SOCK) continue;
+                if (::connect(s, p->ai_addr, static_cast<int>(p->ai_addrlen)) == 0) {
+                    freeaddrinfo(res);
+                    set_nodelay(s);
+                    return s;
+                }
+                close_socket(s);
+            }
+            freeaddrinfo(res);
+        }
+        double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        if (elapsed >= timeout)
+            fail("Não foi possível conectar a " + host + ":" + std::to_string(port) + " depois de " +
+                 num_to_str(timeout) + " s. O outro programa está em execução?");
+        if (!warned) {
+            net_log("aguardando o outro programa em " + host + ":" + std::to_string(port) + " ...");
+            warned = true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+}
+
+// Abre a porta e espera uma conexão.
+inline sock_t tcp_accept(int port, double timeout) {
+    net_init();
+    sock_t ls = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (ls == BAD_SOCK) fail("Não foi possível criar o socket");
+    int yes = 1;
+    setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&yes), sizeof yes);
+    sockaddr_in addr;
+    std::memset(&addr, 0, sizeof addr);
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons(static_cast<unsigned short>(port));
+    if (::bind(ls, reinterpret_cast<sockaddr*>(&addr), sizeof addr) != 0 || ::listen(ls, 1) != 0) {
+        close_socket(ls);
+        fail("Não foi possível abrir a porta " + std::to_string(port) + " (já está em uso?)");
+    }
+    net_log("aguardando conexão na porta " + std::to_string(port) + " ...");
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(ls, &fds);
+    timeval tv;
+    tv.tv_sec = static_cast<long>(timeout);
+    tv.tv_usec = static_cast<long>((timeout - static_cast<long>(timeout)) * 1e6);
+    int r = ::select(static_cast<int>(ls) + 1, &fds, nullptr, nullptr, &tv);
+    if (r <= 0) {
+        close_socket(ls);
+        fail("Tempo esgotado (" + num_to_str(timeout) + " s) aguardando conexão na porta " +
+             std::to_string(port));
+    }
+    sock_t c = ::accept(ls, nullptr, nullptr);
+    close_socket(ls);
+    if (c == BAD_SOCK) fail("Falha ao aceitar a conexão");
+    set_nodelay(c);
+    return c;
+}
+
+inline void send_all(sock_t s, const char* d, size_t n) {
+    while (n > 0) {
+#ifdef _WIN32
+        int k = ::send(s, d, static_cast<int>(n), 0);
+#else
+        ssize_t k = ::send(s, d, n, MSG_NOSIGNAL);
+#endif
+        if (k <= 0) fail("Falha ao enviar pela conexão (o outro programa encerrou?)");
+        d += k;
+        n -= static_cast<size_t>(k);
+    }
+}
+
+inline void recv_all(sock_t s, char* d, size_t n) {
+    while (n > 0) {
+#ifdef _WIN32
+        int k = ::recv(s, d, static_cast<int>(n), 0);
+#else
+        ssize_t k = ::recv(s, d, n, 0);
+#endif
+        if (k == 0) fail("Conexão encerrada pelo outro programa");
+        if (k < 0) fail("Falha ao receber pela conexão");
+        d += k;
+        n -= static_cast<size_t>(k);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Mensagens: serialização de valores (número, string, bool, null e listas)
+// ----------------------------------------------------------------------------
+inline void put_u32(std::string& out, uint32_t v) {
+    for (int i = 3; i >= 0; --i) out.push_back(static_cast<char>((v >> (8 * i)) & 0xFF));
+}
+
+inline void encode(const Value& v, std::string& out) {
+    switch (v.tag) {
+        case Value::NIL: out.push_back(0); break;
+        case Value::BOOL: out.push_back(1); out.push_back(v.b ? 1 : 0); break;
+        case Value::NUM: {
+            uint64_t bits;
+            std::memcpy(&bits, &v.n, 8);
+            out.push_back(2);
+            for (int i = 7; i >= 0; --i) out.push_back(static_cast<char>((bits >> (8 * i)) & 0xFF));
+            break;
+        }
+        case Value::STR:
+            out.push_back(3);
+            put_u32(out, static_cast<uint32_t>(v.str().size()));
+            out += v.str();
+            break;
+        case Value::LIST:
+            out.push_back(4);
+            put_u32(out, static_cast<uint32_t>(v.list().v.size()));
+            for (const auto& item : v.list().v) encode(item, out);
+            break;
+        default:
+            fail(std::string("Um valor do tipo ") + type_name(v) +
+                 " não pode ser enviado por um canal (use números, strings, bool, null e listas)");
+    }
+}
+
+inline Value decode(const std::string& buf, size_t& pos, int depth = 0) {
+    auto need = [&](size_t n) {
+        if (pos + n > buf.size()) fail("Mensagem recebida está corrompida");
+    };
+    if (depth > 64) fail("Mensagem recebida tem listas aninhadas demais");
+    need(1);
+    unsigned char tag = static_cast<unsigned char>(buf[pos++]);
+    switch (tag) {
+        case 0: return Value();
+        case 1: need(1); return Value(buf[pos++] != 0);
+        case 2: {
+            need(8);
+            uint64_t bits = 0;
+            for (int i = 0; i < 8; ++i) bits = (bits << 8) | static_cast<unsigned char>(buf[pos++]);
+            double d;
+            std::memcpy(&d, &bits, 8);
+            return Value(d);
+        }
+        case 3: {
+            need(4);
+            uint32_t n = 0;
+            for (int i = 0; i < 4; ++i) n = (n << 8) | static_cast<unsigned char>(buf[pos++]);
+            need(n);
+            Value r{std::string(buf, pos, n)};
+            pos += n;
+            return r;
+        }
+        case 4: {
+            need(4);
+            uint32_t n = 0;
+            for (int i = 0; i < 4; ++i) n = (n << 8) | static_cast<unsigned char>(buf[pos++]);
+            Value r = Value::make_list();
+            for (uint32_t i = 0; i < n; ++i) r.list().v.push_back(decode(buf, pos, depth + 1));
+            return r;
+        }
+        default: fail("Mensagem recebida tem um tipo desconhecido");
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Canais de comunicação
+//   * declarado:   c_channel canal computador_1 computador_2;
+//       o computador_1 conecta e o computador_2 escuta (o endereço de cada um vem
+//       de minipar.hosts; quem é este programa vem de --node)
+//   * expressão:   c_channel("ip", porta)
+//       conecta ao endereço; com "" ou "0.0.0.0" como endereço, escuta na porta
 // ----------------------------------------------------------------------------
 struct Channel {
+    enum Kind { DECLARED, CLIENT, SERVER };
+    Kind kind = DECLARED;
     std::string name, a, b, host;
     int port = 0;
+    sock_t fd = BAD_SOCK;
+    std::mutex conn_m, send_m, recv_m;
+    bool closed = false;
+    ~Channel() {
+        if (fd != BAD_SOCK) close_socket(fd);
+    }
 };
 
 inline Value make_channel(const char* name, const char* a, const char* b) {
     auto c = std::make_shared<Channel>();
+    c->kind = Channel::DECLARED;
     c->name = name; c->a = a; c->b = b;
     return Value::make_channel(c);
 }
@@ -438,15 +757,79 @@ inline Value new_channel(const Value& host, const Value& port) {
     auto c = std::make_shared<Channel>();
     c->host = host.str();
     c->port = static_cast<int>(port.n);
+    c->kind = (c->host.empty() || c->host == "0.0.0.0" || c->host == "*") ? Channel::SERVER
+                                                                          : Channel::CLIENT;
     return Value::make_channel(c);
 }
 
-[[noreturn]] inline void channels_unavailable() {
-    fail("Canais de comunicação ainda não estão disponíveis nesta versão do runtime");
+inline Channel& need_channel(const Value& v, const char* what) {
+    if (v.tag != Value::CHAN)
+        fail(std::string(what) + " exige um canal (c_channel), mas recebeu " + type_name(v));
+    return v.chan();
 }
-inline void chan_send(const Value&, const Args&) { channels_unavailable(); }
-inline Value chan_receive(const Value&) { channels_unavailable(); }
-inline void chan_close(const Value&) { channels_unavailable(); }
+
+// Estabelece a conexão na primeira vez que o canal é usado.
+inline void ensure_connected(Channel& c) {
+    std::lock_guard<std::mutex> lock(c.conn_m);
+    if (c.closed) fail("O canal já foi fechado");
+    if (c.fd != BAD_SOCK) return;
+    double timeout = config().timeout;
+    if (c.kind == Channel::DECLARED) {
+        const std::string& me = config().node;
+        if (me != c.a && me != c.b) {
+            fail("O canal '" + c.name + "' liga '" + c.a + "' e '" + c.b + "'. Informe qual deles este "
+                 "programa é, por exemplo: --node " + c.a +
+                 (me.empty() ? "" : "  (valor atual: '" + me + "')"));
+        }
+        int port = port_of(c.name);
+        if (me == c.a) c.fd = tcp_connect(host_of(c.b), port, timeout);
+        else c.fd = tcp_accept(port, timeout);
+    } else if (c.kind == Channel::CLIENT) {
+        c.fd = tcp_connect(c.host, c.port, timeout);
+    } else {
+        c.fd = tcp_accept(c.port, timeout);
+    }
+}
+
+inline void chan_send(const Value& ch, const Args& args) {
+    Channel& c = need_channel(ch, "send");
+    std::string payload;
+    payload.push_back(4);
+    put_u32(payload, static_cast<uint32_t>(args.size()));
+    for (const auto& a : args) encode(a, payload);
+    if (payload.size() > 0x7FFFFFFFu) fail("Mensagem grande demais");
+    std::string frame;
+    put_u32(frame, static_cast<uint32_t>(payload.size()));
+    frame += payload;
+    ensure_connected(c);
+    std::lock_guard<std::mutex> lock(c.send_m);
+    send_all(c.fd, frame.data(), frame.size());
+}
+
+inline Value chan_receive(const Value& ch) {
+    Channel& c = need_channel(ch, "receive");
+    ensure_connected(c);
+    std::lock_guard<std::mutex> lock(c.recv_m);
+    char head[4];
+    recv_all(c.fd, head, 4);
+    uint32_t n = 0;
+    for (int i = 0; i < 4; ++i) n = (n << 8) | static_cast<unsigned char>(head[i]);
+    if (n > 0x40000000u) fail("Mensagem recebida é grande demais");
+    std::string payload(n, '\0');
+    if (n > 0) recv_all(c.fd, &payload[0], n);
+    size_t pos = 0;
+    return decode(payload, pos);
+}
+
+inline void chan_close(const Value& ch) {
+    Channel& c = need_channel(ch, "close");
+    std::lock_guard<std::mutex> lock(c.conn_m);
+    if (c.fd != BAD_SOCK) {
+        close_socket(c.fd);
+        c.fd = BAD_SOCK;
+    }
+    c.closed = true;
+}
 
 // ----------------------------------------------------------------------------
 // Chamada dinâmica de método (objetos e métodos nativos de lista/string/canal)
@@ -476,11 +859,6 @@ inline Value call_method(const Value& o, const char* name, Args args) {
 // ----------------------------------------------------------------------------
 // Entrada e saída
 // ----------------------------------------------------------------------------
-inline std::mutex& io_mutex() {
-    static std::mutex m;
-    return m;
-}
-
 inline void print(std::initializer_list<Value> items) {
     std::string line;
     bool first = true;
@@ -790,8 +1168,44 @@ public:
 
 // ----------------------------------------------------------------------------
 // Execução do programa
+//   opções:  --node NOME   quem este programa é (ex.: computador_1)
+//            --hosts ARQ   arquivo de endereços (padrão: minipar.hosts, se existir)
+//   variáveis de ambiente: MINIPAR_NODE, MINIPAR_HOSTS, MINIPAR_TIMEOUT (segundos)
 // ----------------------------------------------------------------------------
-inline int run_program(const std::function<void()>& init, const std::function<void()>& entry) {
+inline bool parse_args(int argc, char** argv, std::string& hosts_file) {
+    if (const char* e = std::getenv("MINIPAR_NODE")) config().node = e;
+    if (const char* e = std::getenv("MINIPAR_HOSTS")) hosts_file = e;
+    if (const char* e = std::getenv("MINIPAR_TIMEOUT")) config().timeout = std::atof(e);
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        auto value_of = [&](const char* flag, std::string& out) {
+            std::string f = flag;
+            if (a == f) {
+                if (i + 1 >= argc) fail("A opção " + f + " precisa de um valor");
+                out = argv[++i];
+                return true;
+            }
+            if (a.rfind(f + "=", 0) == 0) {
+                out = a.substr(f.size() + 1);
+                return true;
+            }
+            return false;
+        };
+        if (a == "--help" || a == "-h") {
+            std::printf("Uso: %s [--node NOME] [--hosts ARQUIVO]\n"
+                        "  --node NOME      quem este programa é (ex.: computador_1)\n"
+                        "  --hosts ARQUIVO  endereços dos computadores (padrão: minipar.hosts)\n",
+                        argv[0]);
+            return false;
+        }
+        if (value_of("--node", config().node)) continue;
+        if (value_of("--hosts", hosts_file)) continue;
+    }
+    return true;
+}
+
+inline int run_program(int argc, char** argv, const std::function<void()>& init,
+                       const std::function<void()>& entry) {
     start_time();
     std::ios::sync_with_stdio(true);
 #ifdef _WIN32
@@ -799,6 +1213,10 @@ inline int run_program(const std::function<void()>& init, const std::function<vo
 #endif
     int code = 0;
     try {
+        std::string hosts_file;
+        if (!parse_args(argc, argv, hosts_file)) return 0;
+        if (!hosts_file.empty()) load_hosts_file(hosts_file, true);
+        else load_hosts_file("minipar.hosts", false);
         init();
         entry();
     } catch (const std::exception& e) {

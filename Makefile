@@ -2,14 +2,14 @@
 PY ?= python3
 export PYTHONPATH := src
 
-.PHONY: test test-rapido tokens ast check tac cpp build run clean
+.PHONY: test test-rapido tokens ast check tac cpp build run teste1-servidor teste1-cliente teste1-demo clean
 
 test:
 	$(PY) -m unittest discover -s tests -v
 
 # testes sem compilar com o g++ (rápido); "make test" roda tudo
 test-rapido:
-	$(PY) -m unittest discover -s tests -p "test_[lpst]*.py"
+	$(PY) -m unittest tests.test_lexer tests.test_parser tests.test_semantic tests.test_tac
 
 # uso: make tokens F=exemplos/teste02_par_fatorial_fibonacci.mp
 tokens:
@@ -38,6 +38,21 @@ build:
 # uso: make run F=exemplos/teste03_neuronio.mp
 run:
 	$(PY) -m minipar run $(F)
+
+# Teste 1 (calculadora cliente/servidor): em dois terminais, ou tudo de uma vez com teste1-demo
+teste1-servidor:
+	$(PY) -m minipar build exemplos/teste01_servidor.mp > /dev/null
+	./build/teste01_servidor --node computador_2
+
+teste1-cliente:
+	$(PY) -m minipar build exemplos/teste01_cliente.mp > /dev/null
+	./build/teste01_cliente --node computador_1
+
+teste1-demo:
+	$(PY) -m minipar build exemplos/teste01_servidor.mp > /dev/null
+	$(PY) -m minipar build exemplos/teste01_cliente.mp > /dev/null
+	./build/teste01_servidor --node computador_2 & \
+	sleep 1; printf '+\n3\n4\n*\n6\n7\n/\n1\n0\nsair\n' | ./build/teste01_cliente --node computador_1; wait
 
 clean:
 	find . -name "__pycache__" -type d -prune -exec rm -rf {} +

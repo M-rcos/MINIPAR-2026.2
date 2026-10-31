@@ -72,8 +72,8 @@ mp::Value fn_main() {
 static void register_classes() {
 }
 
-int main() {
-    return mp::run_program([]() {
+int main(int argc, char** argv) {
+    return mp::run_program(argc, argv, []() {
         register_classes();
     }, []() { fn_main(); });
 }

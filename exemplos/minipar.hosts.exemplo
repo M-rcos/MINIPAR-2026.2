@@ -1,0 +1,11 @@
+# Endereços dos computadores usados pelos canais (copie para "minipar.hosts").
+# Sem este arquivo, todos os computadores são 127.0.0.1 (localhost).
+#
+# Com dois computadores reais, informe o endereço do computador que ESCUTA
+# (o segundo da declaração "c_channel canal computador_1 computador_2;"):
+computador_1 = 127.0.0.1
+computador_2 = 127.0.0.1
+
+# Porta do canal "calculadora" (opcional; sem esta linha a porta é calculada
+# a partir do nome do canal, entre 20000 e 39999):
+# port.calculadora = 7000

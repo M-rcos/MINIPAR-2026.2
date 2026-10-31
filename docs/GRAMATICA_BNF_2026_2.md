@@ -213,7 +213,7 @@ ampliada para atender aos Programas de Teste 1 a 11 da versão 2026.2.
 * `seq { ... }`: execução sequencial.
 * `par { c1 c2 ... }`: cada comando filho vira uma thread (`std::thread` no C++ gerado), com `join` ao final do bloco. Threads não compartilham variáveis; a comunicação é só por mensagem.
 * `fork nome [on ...] { ... }`: cria a subtarefa `nome`. Sem `on`, roda em uma thread local. Com `on core N`, a thread é fixada no núcleo N. Com `on host "ip", porta`, a subtarefa é despachada para outro computador. `join` espera as subtarefas.
-* `c_channel canal computador_1 computador_2;`: declara o canal. O endereço de cada computador é resolvido por um arquivo de configuração (padrão: localhost).
+* `c_channel canal computador_1 computador_2;`: declara o canal. O primeiro computador conecta e o segundo escuta. Cada programa informa quem é com `--node` e os endereços ficam em `minipar.hosts` (padrão: localhost). Ver `docs/CANAIS.md`.
 * `canal.send(a, b, c)` envia uma mensagem com 3 campos; `canal.receive()` bloqueia até chegar uma mensagem e devolve uma lista com os campos.
 
 ## 6. Biblioteca nativa (identificadores pré-declarados)
@@ -240,5 +240,5 @@ Métodos nativos: `lista.append(v)`, `lista.push_back(v)`, `lista.pop()`, `lista
 ## 7. Decisões que vale confirmar com o professor
 
 1. Construtor com o nome `init` (alternativa: método com o mesmo nome da classe).
-2. Como cada processo sabe se é `computador_1` ou `computador_2`: proposta de opção `--node` na compilação ou execução.
+2. Como cada processo sabe se é `computador_1` ou `computador_2`: implementado com a opção `--node` na execução e o arquivo `minipar.hosts` para os endereços.
 3. Formato de `fork ... on host`: proposta de um processo trabalhador (`worker`) rodando no outro computador.

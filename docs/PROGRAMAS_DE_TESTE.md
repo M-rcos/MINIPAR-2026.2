@@ -4,7 +4,7 @@ Todos os comandos rodam na pasta do projeto. `make run F=arquivo.mp` compila com
 
 | Teste | Programa | Situação | Como executar |
 |---|---|---|---|
-| 1 | `teste01_servidor.mp` e `teste01_cliente.mp` | Compila; os canais com sockets entram na Etapa 7 | (Etapa 7) |
+| 1 | `teste01_servidor.mp` e `teste01_cliente.mp` | Cliente e servidor se comunicam por sockets em localhost | `make teste1-demo` (ver `docs/CANAIS.md`) |
 | 2 | `teste02_par_fatorial_fibonacci.mp` | Executa em threads | `make run F=exemplos/teste02_par_fatorial_fibonacci.mp` |
 | 3 | `teste03_neuronio.mp` | Saída idêntica ao enunciado (51 iterações) | `make run F=exemplos/teste03_neuronio.mp` |
 | 4 | `teste04_rede_xor.mp` | Converge (cerca de 0,3 s com `-O2`) | `python3 -m minipar run exemplos/teste04_rede_xor.mp -O2` |

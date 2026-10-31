@@ -38,11 +38,14 @@ Cabeçalho único em C++17. Principais pontos:
 * **Subtarefas**: cada `par`/`fork` captura as variáveis locais **por cópia** (`[=]`), como processos independentes. Variáveis globais e o conteúdo de listas e objetos compartilham memória (o analisador semântico já bloqueia a atribuição direta a variáveis externas).
 * **Saída**: o `print` monta a linha inteira e a escreve sob um `mutex`, para que linhas de threads diferentes não se misturem.
 
+## Canais
+
+Implementados com sockets TCP (ver `docs/CANAIS.md`). O programa compilado aceita `--node` e `--hosts`.
+
 ## O que ainda não está implementado
 
 | Recurso | Etapa |
 |---|---|
-| Canais com sockets (`send`/`receive`/`c_channel`): o C++ é gerado, mas o runtime ainda responde com um erro claro | 7 |
 | `fork ... on host "ip", porta` em outro computador: por enquanto executa localmente e avisa na tela | 8 |
 
 ## Desempenho

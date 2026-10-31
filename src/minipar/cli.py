@@ -9,7 +9,7 @@ Comandos disponíveis nesta etapa:
                                     código intermediário de três endereços
     cpp     <arquivo.mp> [-o saida.cpp]     gera o código C++
     build   <arquivo.mp> [-o exe] [-O2]     compila até o executável (GCC)
-    run     <arquivo.mp> [-O2]              compila e executa
+    run     <arquivo.mp> [-O2] [args...]    compila e executa (args vão para o programa)
 
 Os demais comandos (ast, check, tac, cpp, build, run) serão adicionados
 conforme os componentes forem implementados.
@@ -192,7 +192,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     result = _build(args)
     if result is None:
         return 1
-    return subprocess.call([str(result.exe_path.resolve())])
+    extra = [a for a in (args.programa_args or []) if a != "--"]
+    return subprocess.call([str(result.exe_path.resolve())] + extra)
 
 
 def main(argv=None) -> int:
@@ -234,6 +235,9 @@ def main(argv=None) -> int:
         p.add_argument("arquivo")
         if name == "build":
             p.add_argument("-o", "--saida", help="caminho do executável")
+        if name == "run":
+            p.add_argument("programa_args", nargs=argparse.REMAINDER,
+                           help="argumentos passados ao programa (ex.: --node computador_1)")
         p.add_argument("-O", dest="opt", default="2", choices=["0", "1", "2", "3", "s"],
                        help="nível de otimização do GCC (padrão: 2)")
         p.add_argument("--dir", default="build", help="pasta de saída (padrão: build)")

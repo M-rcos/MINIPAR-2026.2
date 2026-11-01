@@ -158,7 +158,7 @@ mp::Value fn_main() {
     return mp::Value();
 }
 
-static void register_classes() {
+static void register_all() {
     mp::register_class("Quicksort", "", {
         {"init", [](const mp::Value& self, mp::Args& a) -> mp::Value { mp::check_arity("Quicksort.init", a, 1); return fn_Quicksort_D_init(self, a[0]); }},
         {"ordenar", [](const mp::Value& self, mp::Args& a) -> mp::Value { mp::check_arity("Quicksort.ordenar", a, 0); return fn_Quicksort_D_ordenar(self); }},
@@ -171,6 +171,6 @@ static void register_classes() {
 
 int main(int argc, char** argv) {
     return mp::run_program(argc, argv, []() {
-        register_classes();
+        register_all();
     }, []() { fn_main(); });
 }

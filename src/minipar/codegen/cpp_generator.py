@@ -22,6 +22,7 @@ import re
 from typing import Dict, List, Optional, Set
 
 from ..tac import TACFunction, TACInstr, TACProgram
+from ..tac.instructions import is_literal, is_temp
 from .interface import ICodeGenerator
 
 _NUMBER = re.compile(r"^-?\d+(\.\d+)?([eE][+-]?\d+)?$")
@@ -38,11 +39,11 @@ _REL = {"==": "eq", "!=": "ne", "<": "lt", ">": "gt", "<=": "le", ">=": "ge"}
 
 
 def fn_name(tac_name: str) -> str:
-    return "fn_" + tac_name.replace(".", "_D_")
+    return "fn_" + tac_name.replace(".", "_D_").replace("$", "_T_")
 
 
 def var_name(name: str) -> str:
-    return name if _TEMP.match(name) else "v_" + name
+    return name if is_temp(name) else "v_" + name
 
 
 def cstring(text: str) -> str:
@@ -67,11 +68,6 @@ def cstring(text: str) -> str:
     return '"' + "".join(out) + '"'
 
 
-def is_literal(tok: str) -> bool:
-    return (bool(_NUMBER.match(tok)) or tok.startswith('"')
-            or tok in ("true", "false", "null"))
-
-
 def opd(tok: Optional[str]) -> str:
     """Operando TAC -> expressão C++ do tipo mp::Value."""
     if tok is None:
@@ -90,44 +86,6 @@ def opd(tok: Optional[str]) -> str:
     if tok == "this":
         return "self"
     return var_name(tok)
-
-
-def _operand_fields(i: TACInstr) -> List[Optional[str]]:
-    """Campos da instrução que contêm operandos (variáveis ou literais)."""
-    op = i.op
-    if op in ("assign", "unop", "pop", "size", "receive", "input"):
-        return [i.a]
-    if op in ("binop", "load_index", "new_channel", "append"):
-        return [i.a, i.b]
-    if op in ("if_rel",):
-        return [i.a, i.b]
-    if op in ("if_true", "if_false", "param", "return", "close"):
-        return [i.a]
-    if op == "callm":
-        return [i.a]
-    if op == "load_member":
-        return [i.a]
-    if op == "store_member":
-        return [i.a, i.c]
-    if op == "store_index":
-        return [i.a, i.b, i.c]
-    if op == "new_matrix":
-        return [i.a, i.b, i.c]
-    if op == "print":
-        return list(i.args)
-    if op == "send":
-        return [i.a] + list(i.args)
-    if op == "fork":
-        return [i.b, i.c]
-    return []
-
-
-def _dest_fields(i: TACInstr) -> List[Optional[str]]:
-    if i.op in ("assign", "binop", "unop", "call", "callm", "load_member", "load_index",
-                "new_obj", "new_list", "pop", "size", "new_matrix", "new_channel",
-                "input", "receive"):
-        return [i.dst]
-    return []
 
 
 class CppGenerator(ICodeGenerator):
@@ -176,13 +134,11 @@ class CppGenerator(ICodeGenerator):
     def _locals_of(self, f: TACFunction) -> List[str]:
         names: Set[str] = set()
         for ins in f.instrs:
-            for tok in _operand_fields(ins) + _dest_fields(ins):
-                if tok is None or is_literal(tok) or tok == "this":
-                    continue
-                names.add(tok)
+            names |= ins.variables()
+        names.discard("this")
         names -= set(f.params)
         names -= self.globals
-        return sorted(names, key=lambda n: (not _TEMP.match(n), n))
+        return sorted(names, key=lambda n: (not is_temp(n), n))
 
     # ------------------------------------------------------------------
     def _function(self, f: TACFunction) -> List[str]:
@@ -195,7 +151,7 @@ class CppGenerator(ICodeGenerator):
         used_labels = {i.dst for i in f.instrs
                        if i.op in ("goto", "if_rel", "if_true", "if_false")}
         local_vars = self._locals_of(f)
-        has_fork = any(i.op == "fork" for i in f.instrs)
+        has_fork = any(i.op in ("fork", "join", "join_value") for i in f.instrs)
 
         self._emit(f"// {f.name}")
         if local_vars:
@@ -311,37 +267,38 @@ class CppGenerator(ICodeGenerator):
             e(f"mp::TaskGroup __g{self.group_n};")
         elif op == "task":
             gid = self.group_stack[-1]
-            e(f"__g{gid}.spawn({cstring(i.dst)}, -1, [=]() mutable {{")
-            self.indent += 1
-        elif op == "fork":
-            name = cstring(i.dst)
-            if i.a == "core":
-                e(f"__forks.spawn({name}, {opd(i.b)}, [=]() mutable {{")
-            elif i.a == "host":
-                e(f"__forks.spawn_host({name}, {opd(i.b)}, {opd(i.c)}, [=]() mutable {{")
-            else:
-                e(f"__forks.spawn_local({name}, [=]() mutable {{")
-            self.indent += 1
-        elif op == "end_task":
-            self.indent -= 1
-            e("});")
+            args = ", ".join(f"mp::copy_for_task({opd(a)})" for a in i.args)
+            e(f"__g{gid}.spawn({cstring(i.dst)}, -1, {cstring(i.a)}, {{{args}}});")
         elif op == "par_end":
             gid = self.group_stack.pop()
             e(f"__g{gid}.join();")
             self.indent -= 1
             e("}")
+        elif op == "fork":
+            name = cstring(i.dst)
+            task_id = cstring(i.extra)
+            args = ", ".join(f"mp::copy_for_task({opd(a)})" for a in i.args)
+            if i.a == "host":
+                port = opd(i.c) if i.c is not None else "mp::Value()"
+                e(f"__forks.spawn_host({name}, {opd(i.b)}, {port}, {task_id}, {{{args}}});")
+            elif i.a == "core":
+                e(f"__forks.spawn({name}, {opd(i.b)}, {task_id}, {{{args}}});")
+            else:
+                e(f"__forks.spawn({name}, mp::Value(), {task_id}, {{{args}}});")
         elif op == "join":
             if i.args:
                 names = ", ".join(cstring(n) for n in i.args)
                 e(f"__forks.join({{{names}}});")
             else:
                 e("__forks.join_all();")
+        elif op == "join_value":
+            e(f"{var_name(i.dst)} = __forks.join_value({cstring(i.a)});")
         else:
             raise ValueError(f"Instrução TAC sem tradução para C++: {op}")
 
     # ------------------------------------------------------------------
     def _registration(self, program: TACProgram) -> List[str]:
-        out = ["static void register_classes() {"]
+        out = ["static void register_all() {"]
         by_name = {f.name: f for f in program.functions}
         for c in program.classes:
             out.append(f"    mp::register_class({cstring(c.name)}, {cstring(c.superclass or '')}, {{")
@@ -354,6 +311,15 @@ class CppGenerator(ICodeGenerator):
                     f"        {{{cstring(m)}, [](const mp::Value& self, mp::Args& a) -> mp::Value {{ "
                     f"mp::check_arity({cstring(c.name + '.' + m)}, a, {n}); return {call}; }}}},")
             out.append("    });")
+        for f in program.functions:
+            if not f.is_task:
+                continue
+            n = len(f.params)
+            call_args = ", ".join(f"a[{k}]" for k in range(n))
+            out.append(
+                f"    mp::register_task({cstring(f.name)}, [](mp::Args& a) -> mp::Value {{ "
+                f"mp::check_arity({cstring('tarefa ' + f.name)}, a, {n}); "
+                f"return {fn_name(f.name)}({call_args}); }});")
         out.append("}")
         out.append("")
         return out
@@ -361,7 +327,7 @@ class CppGenerator(ICodeGenerator):
     def _main(self, program: TACProgram) -> List[str]:
         out = ["int main(int argc, char** argv) {"]
         out.append("    return mp::run_program(argc, argv, []() {")
-        out.append("        register_classes();")
+        out.append("        register_all();")
         for name, a, b in program.channels:
             out.append(f"        {var_name(name)} = mp::make_channel({cstring(name)}, "
                        f"{cstring(a)}, {cstring(b)});")

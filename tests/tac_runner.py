@@ -29,6 +29,7 @@ class TACRunner:
         self.stdin = list(stdin)
         self.params = []
         self.steps = 0
+        self.task_results = {}
 
     # ---------------------------------------------------------------
     def run(self):
@@ -116,7 +117,13 @@ class TACRunner:
                 self.out.append(" ".join(self.show(self.val(env, a)) for a in ins.args))
             elif op == "input":
                 self.set(env, ins.dst, self.stdin.pop(0))
-            elif op in ("label", "par_begin", "par_end", "task", "end_task", "fork", "join"):
+            elif op in ("task", "fork"):
+                alvo = ins.a if op == "task" else ins.extra
+                args2 = [self.val_or_none(env, x) for x in ins.args]
+                self.task_results[ins.dst] = self.call(alvo, args2)
+            elif op == "join_value":
+                self.set(env, ins.dst, self.task_results.get(ins.a))
+            elif op in ("label", "par_begin", "par_end", "join"):
                 pass
             else:
                 raise RuntimeError(f"instrução não suportada no runner: {op}")
@@ -128,6 +135,12 @@ class TACRunner:
             self.globals[name] = value
         else:
             env[name] = value
+
+    def val_or_none(self, env, tok):
+        try:
+            return self.val(env, tok)
+        except RuntimeError:
+            return None
 
     def val(self, env, tok):
         if tok is None:

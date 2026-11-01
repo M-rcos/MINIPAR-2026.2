@@ -26,14 +26,14 @@ from typing import Dict, List, Optional, Set
 from ..parser.ast_nodes import (
     Assign, Binary, Block, Break, Call, ChannelDecl, ChannelExpr, ClassDecl,
     Continue, DoWhile, Expr, ExprStmt, For, ForIn, Fork, FuncDecl, Identifier,
-    If, Index, Input, Join, ListLiteral, Literal, MatrixExpr, Member,
+    If, Index, Input, Join, JoinExpr, ListLiteral, Literal, MatrixExpr, Member,
     MethodCall, New, Node, ParBlock, Print, Program, Receive, Return, Send,
     This, Unary, VarDecl, While,
 )
 from ..semantic import SemanticAnalyzer
 from ..symtable import CHANNEL_SYM, VARIABLE, Symbol
 from ..symtable.types import CHANNEL, LIST, STRING, VOID
-from .instructions import TACClass, TACFunction, TACInstr, TACProgram
+from .instructions import TACClass, TACFunction, TACInstr, TACProgram, is_literal, is_temp
 from .interface import ITACGenerator
 
 _RELATIONAL = {"==", "!=", "<", ">", "<=", ">="}
@@ -52,6 +52,7 @@ class _Ctx:
         self.used: Set[str] = set(used)
         self.used.add("this")
         self.loops: List[tuple] = []     # (rótulo do continue, rótulo do break)
+        self.task_inner: List[Set[str]] = []   # variáveis declaradas dentro de cada tarefa aberta
 
 
 class TACGenerator(ITACGenerator):
@@ -61,6 +62,8 @@ class TACGenerator(ITACGenerator):
         self.labels = 0
         self.tasks = 0
         self._fresh: Optional[str] = None   # variável recém-declarada (destino seguro)
+        self.extra_functions: List[TACFunction] = []   # tarefas (par/fork) já separadas
+        self.task_fn_names: Set[str] = set()
         self.global_names: Dict[Symbol, str] = {}
 
     # ==================================================================
@@ -82,6 +85,7 @@ class TACGenerator(ITACGenerator):
             elif isinstance(node, FuncDecl):
                 out.functions.append(
                     self._gen_function(node.name, node.params, node.body.statements, False))
+                self._flush_tasks(out)
 
         main_nodes = [n for n in program.body
                       if not isinstance(n, (FuncDecl, ClassDecl, ChannelDecl))]
@@ -90,7 +94,12 @@ class TACGenerator(ITACGenerator):
             self._stmt(node)
         self._ensure_return()
         out.functions.append(TACFunction("main", [], self.ctx.instrs))
+        self._flush_tasks(out)
         return out
+
+    def _flush_tasks(self, out: TACProgram) -> None:
+        out.functions.extend(self.extra_functions)
+        self.extra_functions = []
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -138,6 +147,7 @@ class TACGenerator(ITACGenerator):
         for m in methods:
             out.functions.append(self._gen_function(
                 f"{node.name}.{m.name}", m.params, m.body.statements, True))
+            self._flush_tasks(out)
 
     # ==================================================================
     # Utilitários de emissão
@@ -171,6 +181,8 @@ class TACGenerator(ITACGenerator):
         self.ctx.used.add(name)
         if sym is not None:
             self.ctx.names[sym] = name
+        for inner in self.ctx.task_inner:
+            inner.add(name)
         return name
 
     def _ref(self, sym: Optional[Symbol], fallback: str) -> str:
@@ -373,14 +385,63 @@ class TACGenerator(ITACGenerator):
         self._place(end)
 
     # ---- paralelismo ---------------------------------------------------
+    def _outline_task(self, task_name: str, body) -> tuple:
+        """Gera o corpo de uma subtarefa e o move para uma função própria.
+
+        A função recebe como parâmetros as variáveis locais da função original
+        que o corpo usa (cópias, como em processos independentes). Devolve
+        (nome da função, lista de argumentos para a chamada).
+        """
+        start = len(self.ctx.instrs)
+        inner: Set[str] = set()
+        self.ctx.task_inner.append(inner)
+        body()
+        self.ctx.task_inner.pop()
+        region = self.ctx.instrs[start:]
+        del self.ctx.instrs[start:]
+
+        used: List[str] = []
+        written: Set[str] = set()
+        for ins in region:
+            for tok in ins.reads():
+                if tok is not None and not is_literal(tok) and tok not in used:
+                    used.append(tok)
+            for tok in ins.writes():
+                if tok is not None:
+                    written.add(tok)
+                    if tok not in used and not is_literal(tok):
+                        used.append(tok)
+        globals_ = set(self.global_names.values())
+        captures: List[str] = []
+        uses_this = "this" in used
+        for tok in used:
+            if tok == "this" or tok in globals_ or tok in inner:
+                continue
+            if is_temp(tok) and tok in written:
+                continue                      # temporário criado dentro da própria tarefa
+            captures.append(tok)
+
+        fn_name = f"{self.ctx.name}${task_name}"
+        n = 1
+        while fn_name in self.task_fn_names:
+            n += 1
+            fn_name = f"{self.ctx.name}${task_name}_{n}"
+        self.task_fn_names.add(fn_name)
+
+        params = (["this"] if uses_this else []) + captures
+        if not region or region[-1].op != "return":
+            region.append(TACInstr("return"))
+        self.extra_functions.append(TACFunction(fn_name, list(params), region, is_task=True))
+        return fn_name, list(params)
+
     def _s_ParBlock(self, n: ParBlock) -> None:
         self.tasks += 1
         pid = self.tasks
         self._emit("par_begin")
         for i, stmt in enumerate(n.statements, 1):
-            self._emit("task", dst=f"par{pid}_t{i}")
-            self._stmt(stmt)
-            self._emit("end_task")
+            name = f"par{pid}_t{i}"
+            fn, args = self._outline_task(name, lambda st=stmt: self._stmt(st))
+            self._emit("task", dst=name, a=fn, args=args)
         self._emit("par_end")
 
     def _s_Fork(self, n: Fork) -> None:
@@ -391,10 +452,13 @@ class TACGenerator(ITACGenerator):
             target = self.gen(alloc.target)
             if alloc.port is not None:
                 port = self.gen(alloc.port)
-        self._emit("fork", dst=n.name, a=kind, b=target, c=port)
-        for s in n.body.statements:
-            self._stmt(s)
-        self._emit("end_task")
+
+        def body() -> None:
+            for s in n.body.statements:
+                self._stmt(s)
+
+        fn, args = self._outline_task(n.name, body)
+        self._emit("fork", dst=n.name, a=kind, b=target, c=port, extra=fn, args=args)
 
     def _s_Join(self, n: Join) -> None:
         self._emit("join", args=list(n.names))
@@ -491,6 +555,11 @@ class TACGenerator(ITACGenerator):
         self._emit("assign", dst=t, a=v)
         self._place(end)
         return t
+
+    def _e_JoinExpr(self, e: JoinExpr, dst) -> str:
+        d = dst or self._temp()
+        self._emit("join_value", dst=d, a=e.name)
+        return d
 
     def _e_Unary(self, e: Unary, dst) -> str:
         if e.op == "+":

@@ -428,7 +428,7 @@ mp::Value fn_main() {
     return mp::Value();
 }
 
-static void register_classes() {
+static void register_all() {
     mp::register_class("Produto", "", {
         {"init", [](const mp::Value& self, mp::Args& a) -> mp::Value { mp::check_arity("Produto.init", a, 1); return fn_Produto_D_init(self, a[0]); }},
     });
@@ -453,6 +453,6 @@ static void register_classes() {
 
 int main(int argc, char** argv) {
     return mp::run_program(argc, argv, []() {
-        register_classes();
+        register_all();
     }, []() { fn_main(); });
 }

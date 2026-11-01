@@ -22,7 +22,7 @@ from ..lexer.tokens import T_EOF, T_IDENT, T_NUMBER, T_STRING, TYPE_KEYWORDS, To
 from .ast_nodes import (
     Allocation, Assign, Binary, Block, Break, Call, ChannelDecl, ChannelExpr,
     ClassDecl, Continue, DoWhile, Expr, ExprStmt, For, ForIn, Fork, FuncDecl,
-    Identifier, If, Index, Input, Join, ListLiteral, Literal, MatrixExpr,
+    Identifier, If, Index, Input, Join, JoinExpr, ListLiteral, Literal, MatrixExpr,
     Member, MethodCall, New, Node, Param, ParBlock, Print, Program, Receive,
     Return, Send, This, Unary, VarDecl, While,
 )
@@ -556,6 +556,10 @@ class Parser(IParser):
         if t == "this":
             self._advance()
             return This(**pos)
+        if t == "join":
+            self._advance()
+            name = self._expect(T_IDENT, "o nome da subtarefa após 'join'").lexeme
+            return JoinExpr(name, **pos)
         if t == "new":
             self._advance()
             cls = self._expect(T_IDENT, "o nome da classe após 'new'").lexeme

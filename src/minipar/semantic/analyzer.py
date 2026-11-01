@@ -28,7 +28,7 @@ from ..common import MiniParError, SemanticError
 from ..parser.ast_nodes import (
     Assign, Binary, Block, Break, Call, ChannelDecl, ChannelExpr, ClassDecl,
     Continue, DoWhile, Expr, ExprStmt, For, ForIn, Fork, FuncDecl, Identifier,
-    If, Index, Input, Join, ListLiteral, Literal, MatrixExpr, Member,
+    If, Index, Input, Join, JoinExpr, ListLiteral, Literal, MatrixExpr, Member,
     MethodCall, New, Node, ParBlock, Print, Program, Receive, Return, Send,
     This, Unary, VarDecl, While,
 )
@@ -76,6 +76,8 @@ class SemanticAnalyzer(ISemanticAnalyzer, NodeVisitor):
         self.cls_ctx: Optional[ClassInfo] = None
         self.in_method = False
         self.in_task = False
+        self.task_ctx: Optional[_FuncCtx] = None   # fork em análise (pode devolver valor)
+        self.in_remote_task = False                # dentro de "fork ... on host"
 
     # ==================================================================
     # Interface ISemanticAnalyzer
@@ -317,16 +319,20 @@ class SemanticAnalyzer(ISemanticAnalyzer, NodeVisitor):
             self.table.define(psym)
             self.resolved[p] = psym
 
-        saved = (self.loop_depth, self.func_ctx, self.cls_ctx, self.in_method, self.in_task)
+        saved = (self.loop_depth, self.func_ctx, self.cls_ctx, self.in_method, self.in_task,
+                 self.task_ctx, self.in_remote_task)
         ctx = _FuncCtx(node.name)
         self.loop_depth = 0
         self.func_ctx = ctx
         self.cls_ctx = owner
         self.in_method = owner is not None
         self.in_task = False
+        self.task_ctx = None
+        self.in_remote_task = False
         for stmt in node.body.statements:
             self.visit(stmt)
-        (self.loop_depth, self.func_ctx, self.cls_ctx, self.in_method, self.in_task) = saved
+        (self.loop_depth, self.func_ctx, self.cls_ctx, self.in_method, self.in_task,
+         self.task_ctx, self.in_remote_task) = saved
         self.table.exit_scope()
         sym.return_type = self._infer_return(ctx, node)
 
@@ -376,15 +382,18 @@ class SemanticAnalyzer(ISemanticAnalyzer, NodeVisitor):
             self.table.exit_scope()
 
     # ------------------------- PAR / FORK / JOIN ----------------------
-    def _enter_task(self):
-        saved = (self.loop_depth, self.func_ctx, self.in_task)
+    def _enter_task(self, result_ctx: Optional[_FuncCtx] = None, remote: bool = False):
+        saved = (self.loop_depth, self.func_ctx, self.in_task, self.task_ctx, self.in_remote_task)
         self.loop_depth = 0
         self.func_ctx = None
         self.in_task = True
+        self.task_ctx = result_ctx
+        self.in_remote_task = remote
         return saved
 
     def _exit_task(self, saved) -> None:
-        self.loop_depth, self.func_ctx, self.in_task = saved
+        (self.loop_depth, self.func_ctx, self.in_task, self.task_ctx,
+         self.in_remote_task) = saved
 
     def visit_ParBlock(self, node: ParBlock):
         for i, stmt in enumerate(node.statements):
@@ -396,6 +405,7 @@ class SemanticAnalyzer(ISemanticAnalyzer, NodeVisitor):
 
     def visit_Fork(self, node: Fork):
         alloc = node.allocation
+        remote = alloc is not None and alloc.kind == "host"
         if alloc is not None:
             t = self._value(alloc.target)
             if alloc.kind == "core" and t not in (NUMBER, UNKNOWN):
@@ -413,18 +423,33 @@ class SemanticAnalyzer(ISemanticAnalyzer, NodeVisitor):
             self._error(f"O nome '{node.name}' já foi declarado na linha {dup.line}", node)
         else:
             self.resolved[node] = sym
+        ctx = _FuncCtx(node.name)
         self.table.enter_scope(f"fork {node.name}", isolated=True)
-        saved = self._enter_task()
+        saved = self._enter_task(ctx, remote)
         for stmt in node.body.statements:
             self.visit(stmt)
         self._exit_task(saved)
         self.table.exit_scope()
+        sym.return_type = self._task_result_type(ctx)
+
+    @staticmethod
+    def _task_result_type(ctx: _FuncCtx) -> str:
+        concrete = {t for t, _ in ctx.returns if t not in (UNKNOWN, VOID, NULL)}
+        return next(iter(concrete)) if len(concrete) == 1 else UNKNOWN
 
     def visit_Join(self, node: Join):
         for name in node.names:
             sym = self.table.resolve(name)
             if sym is None or sym.kind != TASK:
                 self._error(f"'{name}' não é uma subtarefa criada com 'fork'", node)
+
+    def visit_JoinExpr(self, node: JoinExpr):
+        sym = self.table.resolve(node.name)
+        if sym is None or sym.kind != TASK:
+            self._error(f"'{node.name}' não é uma subtarefa criada com 'fork'", node)
+            return UNKNOWN
+        self.resolved[node] = sym
+        return sym.return_type
 
     # ==================================================================
     # Comandos
@@ -600,9 +625,13 @@ class SemanticAnalyzer(ISemanticAnalyzer, NodeVisitor):
 
     def visit_Return(self, node: Return):
         t = VOID if node.value is None else self._value(node.value)
+        if self.task_ctx is not None:                 # return de uma subtarefa fork
+            self.task_ctx.returns.append((t, node))
+            return
         if self.func_ctx is None:
             if self.in_task:
-                self._error("'return' não é permitido dentro de fork/par", node)
+                self._error("'return' não é permitido dentro de 'par'; use 'fork' para "
+                            "devolver um valor ao programa principal", node)
             else:
                 self._error("'return' só pode ser usado dentro de uma função ou método", node)
             return
@@ -645,6 +674,12 @@ class SemanticAnalyzer(ISemanticAnalyzer, NodeVisitor):
             self._error(f"'{node.name}' é uma subtarefa (fork) e não pode ser usada como valor",
                         node)
             return UNKNOWN
+        if (self.in_remote_task and sym.kind == VARIABLE
+                and self.table.global_scope.symbols.get(sym.name) is sym):
+            self._error(f"A variável global '{node.name}' não existe no outro computador: a "
+                        f"subtarefa remota só recebe cópias das variáveis locais que usa. "
+                        f"Copie o valor para uma variável local (dentro de uma função ou de um "
+                        f"bloco seq {{ }}) antes do fork", node)
         self.resolved[node] = sym
         return sym.type
 

@@ -25,8 +25,9 @@ Arquivos gerados em `build/`: `programa.cpp`, `minipar_runtime.hpp` e o executá
 | `r = callm o.m, 1` | `mp::call_method(o, "m", {a})` (despacho dinâmico) |
 | `x = new C` | `mp::new_obj("C")`; classes registradas em `register_classes()` |
 | `o.campo = v`, `x = o.campo` | `mp::set_member`, `mp::get_member` |
-| `par_begin` ... `task` ... `par_end` | `mp::TaskGroup` com uma thread por tarefa e `join` no fim |
-| `fork t on core N` ... `end_task`, `join` | `mp::ForkTable`: thread nomeada, fixada no núcleo N (`pthread_setaffinity_np` ou `SetThreadAffinityMask`) |
+| `par_begin` ... `task nome -> f(...)` ... `par_end` | `mp::TaskGroup`: uma thread por tarefa, com cópias dos argumentos; `join` no fim |
+| `fork t on core N -> f(...)`, `join`, `x = join t` | `mp::ForkTable`: thread nomeada fixada no núcleo N (`pthread_setaffinity_np` ou `SetThreadAffinityMask`); `join` devolve o resultado da tarefa |
+| `fork t on host H, P -> f(...)` | chamada ao trabalhador de outro computador (`--worker`), com os argumentos serializados |
 
 ## Runtime (`minipar_runtime.hpp`)
 
@@ -42,12 +43,6 @@ Cabeçalho único em C++17. Principais pontos:
 
 Implementados com sockets TCP (ver `docs/CANAIS.md`). O programa compilado aceita `--node` e `--hosts`.
 
-## O que ainda não está implementado
+## Subtarefas e outros computadores
 
-| Recurso | Etapa |
-|---|---|
-| `fork ... on host "ip", porta` em outro computador: por enquanto executa localmente e avisa na tela | 8 |
-
-## Desempenho
-
-Laço com 24 milhões de iterações (equivalente ao `simular_atraso` dos Testes 8 a 10): 0,12 s com `-O2` e 4,2 s com `-O0`.
+Ver `docs/FORK_JOIN.md`.

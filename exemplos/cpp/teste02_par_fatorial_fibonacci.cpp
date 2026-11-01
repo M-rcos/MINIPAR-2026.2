@@ -7,6 +7,8 @@
 mp::Value fn_fatorial(mp::Value v_n);
 mp::Value fn_fibonacci(mp::Value v_n);
 mp::Value fn_main();
+mp::Value fn_main_T_par1_t1();
+mp::Value fn_main_T_par1_t2();
 
 mp::Value fn_fatorial(mp::Value v_n) {
     // fatorial
@@ -42,32 +44,42 @@ mp::Value fn_fibonacci(mp::Value v_n) {
 
 mp::Value fn_main() {
     // main
-    mp::Value t0, v_k;
     {
         mp::TaskGroup __g1;
-        __g1.spawn("par1_t1", -1, [=]() mutable {
-            v_k = mp::Value(2.0);
-            L_while5: ;
-            if (mp::gt(v_k, mp::Value(5.0))) goto L_endwhile6;
-            t0 = fn_fatorial(v_k);
-            mp::print({mp::Value(std::string("Fatorial de", 11)), v_k, mp::Value(std::string("=", 1)), t0});
-            v_k = mp::add(v_k, mp::Value(1.0));
-            goto L_while5;
-            L_endwhile6: ;
-        });
-        __g1.spawn("par1_t2", -1, [=]() mutable {
-            fn_fibonacci(mp::Value(10.0));
-        });
+        __g1.spawn("par1_t1", -1, "main$par1_t1", {});
+        __g1.spawn("par1_t2", -1, "main$par1_t2", {});
         __g1.join();
     }
     return mp::Value();
 }
 
-static void register_classes() {
+mp::Value fn_main_T_par1_t1() {
+    // main$par1_t1
+    mp::Value t0, v_k;
+    v_k = mp::Value(2.0);
+    L_while5: ;
+    if (mp::gt(v_k, mp::Value(5.0))) goto L_endwhile6;
+    t0 = fn_fatorial(v_k);
+    mp::print({mp::Value(std::string("Fatorial de", 11)), v_k, mp::Value(std::string("=", 1)), t0});
+    v_k = mp::add(v_k, mp::Value(1.0));
+    goto L_while5;
+    L_endwhile6: ;
+    return mp::Value();
+}
+
+mp::Value fn_main_T_par1_t2() {
+    // main$par1_t2
+    fn_fibonacci(mp::Value(10.0));
+    return mp::Value();
+}
+
+static void register_all() {
+    mp::register_task("main$par1_t1", [](mp::Args& a) -> mp::Value { mp::check_arity("tarefa main$par1_t1", a, 0); return fn_main_T_par1_t1(); });
+    mp::register_task("main$par1_t2", [](mp::Args& a) -> mp::Value { mp::check_arity("tarefa main$par1_t2", a, 0); return fn_main_T_par1_t2(); });
 }
 
 int main(int argc, char** argv) {
     return mp::run_program(argc, argv, []() {
-        register_classes();
+        register_all();
     }, []() { fn_main(); });
 }

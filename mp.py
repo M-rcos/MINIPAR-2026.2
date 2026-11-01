@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Atalho para o compilador: python3 minipar.py <comando> ...
+"""Atalho para o compilador: python3 mp.py <comando> ...
 
 Equivale a "PYTHONPATH=src python3 -m minipar <comando> ..." e funciona em qualquer
 sistema (Linux, macOS e Windows), sem configurar variáveis de ambiente.

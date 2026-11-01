@@ -28,21 +28,27 @@ endfunc
 
 func main():
     par_begin
-      task par1_t1
-        k = 2
-  while5:
-        if k > 5 goto endwhile6
-        param k
-        t0 = call fatorial, 1
-        print "Fatorial de", k, "=", t0
-        k = k + 1
-        goto while5
-  endwhile6:
-      end_task
-      task par1_t2
-        param 10
-        call fibonacci, 1
-      end_task
+      task par1_t1 -> main$par1_t1()
+      task par1_t2 -> main$par1_t2()
     par_end
+    return
+endfunc
+
+task main$par1_t1():
+    k = 2
+  while5:
+    if k > 5 goto endwhile6
+    param k
+    t0 = call fatorial, 1
+    print "Fatorial de", k, "=", t0
+    k = k + 1
+    goto while5
+  endwhile6:
+    return
+endfunc
+
+task main$par1_t2():
+    param 10
+    call fibonacci, 1
     return
 endfunc

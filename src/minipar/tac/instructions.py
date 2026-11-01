@@ -18,15 +18,31 @@ Conjunto de instruções (formato textual):
   x = new C              cria objeto                 x = new_list   x = new_matrix r, c, v
   append v, a            x = pop v   x = size v      print a, b, ...   x = input [p]
   x = new_channel h, p   send ch, a, ...             x = receive ch    close ch
-  par_begin / par_end    bloco paralelo              task nome ... end_task   subtarefa do par
-  fork nome [on core N | on host H, P] ... end_task  subtarefa independente
-  join [nome, ...]       espera subtarefas
+  par_begin / par_end    bloco paralelo (par_end espera todas as tarefas do bloco)
+  task nome -> f(a, b)   subtarefa do par: executa a função f com cópias de a e b
+  fork nome [on core N | on host H, P] -> f(a, b)   subtarefa independente
+  join [nome, ...]       espera subtarefas        x = join nome   espera e recebe o resultado
+
+As subtarefas (par e fork) são funções separadas, chamadas "tarefas" (nome com $,
+ex.: main$f1). Elas recebem como parâmetros cópias das variáveis locais que usam.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
+
+_NUMBER = re.compile(r"^-?\d+(\.\d+)?([eE][+-]?\d+)?$")
+_TEMP = re.compile(r"^t\d+$")
+
+
+def is_literal(tok: str) -> bool:
+    return bool(_NUMBER.match(tok)) or tok.startswith('"') or tok in ("true", "false", "null")
+
+
+def is_temp(tok: str) -> bool:
+    return bool(_TEMP.match(tok))
 
 
 @dataclass
@@ -41,6 +57,43 @@ class TACInstr:
 
     def __str__(self) -> str:
         return format_instr(self)
+
+    def reads(self) -> List[Optional[str]]:
+        """Campos que contêm operandos lidos (variáveis ou literais)."""
+        op = self.op
+        if op in ("assign", "unop", "pop", "size", "receive", "input", "if_true", "if_false",
+                  "param", "return", "close", "callm", "load_member"):
+            return [self.a]
+        if op in ("binop", "load_index", "new_channel", "append", "if_rel"):
+            return [self.a, self.b]
+        if op == "store_member":
+            return [self.a, self.c]
+        if op in ("store_index", "new_matrix"):
+            return [self.a, self.b, self.c]
+        if op == "print":
+            return list(self.args)
+        if op == "send":
+            return [self.a] + list(self.args)
+        if op == "fork":
+            return [self.b, self.c] + list(self.args)
+        if op == "task":
+            return list(self.args)
+        return []
+
+    def writes(self) -> List[Optional[str]]:
+        if self.op in ("assign", "binop", "unop", "call", "callm", "load_member", "load_index",
+                       "new_obj", "new_list", "pop", "size", "new_matrix", "new_channel",
+                       "input", "receive", "join_value"):
+            return [self.dst]
+        return []
+
+    def variables(self) -> Set[str]:
+        """Nomes de variáveis (não literais) usados pela instrução."""
+        names: Set[str] = set()
+        for tok in self.reads() + self.writes():
+            if tok is not None and not is_literal(tok):
+                names.add(tok)
+        return names
 
     def to_dict(self) -> dict:
         data = {"op": self.op, "text": format_instr(self)}
@@ -117,9 +170,7 @@ def format_instr(i: TACInstr) -> str:
     if op == "par_end":
         return "par_end"
     if op == "task":
-        return f"task {i.dst}"
-    if op == "end_task":
-        return "end_task"
+        return f"task {i.dst} -> {i.a}({', '.join(i.args)})"
     if op == "fork":
         if i.a == "core":
             where = f" on core {i.b}"
@@ -127,9 +178,11 @@ def format_instr(i: TACInstr) -> str:
             where = f" on host {i.b}" + (f", {i.c}" if i.c is not None else "")
         else:
             where = ""
-        return f"fork {i.dst}{where}"
+        return f"fork {i.dst}{where} -> {i.extra}({', '.join(i.args)})"
     if op == "join":
         return "join" + (" " + ", ".join(i.args) if i.args else "")
+    if op == "join_value":
+        return f"{i.dst} = join {i.a}"
     return f"{op} {i.dst} {i.a} {i.b} {i.c}"
 
 
@@ -138,24 +191,26 @@ class TACFunction:
     name: str
     params: List[str]
     instrs: List[TACInstr] = field(default_factory=list)
+    is_task: bool = False          # função criada a partir de um par/fork
 
     def format_lines(self) -> List[str]:
-        lines = [f"func {self.name}({', '.join(self.params)}):"]
+        kind = "task" if self.is_task else "func"
+        lines = [f"{kind} {self.name}({', '.join(self.params)}):"]
         depth = 0
         for ins in self.instrs:
-            if ins.op in ("end_task", "par_end"):
+            if ins.op == "par_end":
                 depth -= 1
             if ins.op == "label":
                 lines.append(f"  {ins}")
             else:
                 lines.append("    " + "  " * depth + str(ins))
-            if ins.op in ("par_begin", "task", "fork"):
+            if ins.op == "par_begin":
                 depth += 1
         lines.append("endfunc")
         return lines
 
     def to_dict(self) -> dict:
-        return {"name": self.name, "params": list(self.params),
+        return {"name": self.name, "params": list(self.params), "is_task": self.is_task,
                 "instrs": [i.to_dict() for i in self.instrs]}
 
 

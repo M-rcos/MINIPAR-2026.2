@@ -375,11 +375,29 @@ class TestCanaisEParalelismo(unittest.TestCase):
     def test_par_com_seq_e_variaveis_locais(self):
         ok("par { seq { var k = 0; while (k < 3) { k += 1; } } seq { var j = 1; j += 1; } }")
 
-    def test_return_e_break_dentro_de_subtarefa(self):
-        self.assertTrue(any("fork/par" in m for m in msgs("func f() { fork t { return 1; } }")))
+    def test_return_em_par_e_break_em_subtarefa(self):
+        self.assertTrue(any("'par'" in m for m in msgs("par { return 1; }")))
         self.assertTrue(any("'break'" in m for m in msgs(
             "while (true) { fork t { break; } }")))
 
+    def test_fork_devolve_valor_para_o_join(self):
+        a = ok("fork t { return 5; } var r = join t; print(r + 1);")
+        self.assertEqual(a.symbol_table.resolve("r").type, "number")
+        ok("fork t { print(1); } join t; var x = join t;")
+
+    def test_join_de_nome_invalido_como_expressao(self):
+        self.assertTrue(any("não é uma subtarefa" in m for m in msgs("var r = join zzz;")))
+        self.assertTrue(any("não é uma subtarefa" in m for m in msgs("var x = 1; var r = join x;")))
+
+    def test_subtarefa_remota_nao_ve_variaveis_globais(self):
+        m = msgs('var g = 1; fork t on host "10.0.0.1", 9000 { return g; }')
+        self.assertTrue(any("não existe no outro computador" in x for x in m))
+        # variável local (dentro de função ou bloco) é copiada e pode ser usada
+        ok('func f() { var c = 1; fork t on host "10.0.0.1", 9000 { return c + 1; } '
+           "return join t; }")
+        ok('seq { var c = 1; fork t on host "10.0.0.1", 9000 { return c + 1; } }')
+        # em fork local, global pode ser lida
+        ok("var g = 1; fork t { return g; }")
 
 class TestExemplos(unittest.TestCase):
     VALIDOS = [

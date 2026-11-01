@@ -449,6 +449,8 @@ struct Config {
     std::map<std::string, std::string> hosts;        // computador -> endereço
     std::map<std::string, int> ports;                // canal -> porta
     double timeout = 120.0;                          // segundos para conectar/aguardar
+    int worker_port = 0;                             // > 0: executa como trabalhador remoto
+    int worker_tasks = 0;                            // trabalhador encerra após N tarefas (0 = sempre)
 };
 
 inline Config& config() {
@@ -587,8 +589,8 @@ inline sock_t tcp_connect(const std::string& host, int port, double timeout) {
     }
 }
 
-// Abre a porta e espera uma conexão.
-inline sock_t tcp_accept(int port, double timeout) {
+// Abre a porta para receber conexões.
+inline sock_t open_listener(int port) {
     net_init();
     sock_t ls = ::socket(AF_INET, SOCK_STREAM, 0);
     if (ls == BAD_SOCK) fail("Não foi possível criar o socket");
@@ -599,10 +601,16 @@ inline sock_t tcp_accept(int port, double timeout) {
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(static_cast<unsigned short>(port));
-    if (::bind(ls, reinterpret_cast<sockaddr*>(&addr), sizeof addr) != 0 || ::listen(ls, 1) != 0) {
+    if (::bind(ls, reinterpret_cast<sockaddr*>(&addr), sizeof addr) != 0 || ::listen(ls, 16) != 0) {
         close_socket(ls);
         fail("Não foi possível abrir a porta " + std::to_string(port) + " (já está em uso?)");
     }
+    return ls;
+}
+
+// Abre a porta e espera uma conexão.
+inline sock_t tcp_accept(int port, double timeout) {
+    sock_t ls = open_listener(port);
     net_log("aguardando conexão na porta " + std::to_string(port) + " ...");
     fd_set fds;
     FD_ZERO(&fds);
@@ -721,6 +729,26 @@ inline Value decode(const std::string& buf, size_t& pos, int depth = 0) {
         }
         default: fail("Mensagem recebida tem um tipo desconhecido");
     }
+}
+
+// Quadro = 4 bytes com o tamanho + conteúdo.
+inline void send_frame(sock_t s, const std::string& payload) {
+    if (payload.size() > 0x7FFFFFFFu) fail("Mensagem grande demais");
+    std::string frame;
+    put_u32(frame, static_cast<uint32_t>(payload.size()));
+    frame += payload;
+    send_all(s, frame.data(), frame.size());
+}
+
+inline std::string recv_frame(sock_t s) {
+    char head[4];
+    recv_all(s, head, 4);
+    uint32_t n = 0;
+    for (int i = 0; i < 4; ++i) n = (n << 8) | static_cast<unsigned char>(head[i]);
+    if (n > 0x40000000u) fail("Mensagem recebida é grande demais");
+    std::string payload(n, '\0');
+    if (n > 0) recv_all(s, &payload[0], n);
+    return payload;
 }
 
 // ----------------------------------------------------------------------------
@@ -1070,8 +1098,55 @@ inline Value bi_sleep(const Value& s) {
 }
 
 // ----------------------------------------------------------------------------
-// Subtarefas: par (um grupo de threads) e fork (threads nomeadas, com núcleo)
+// Subtarefas: par (grupo de threads) e fork (threads nomeadas, com núcleo e resultado)
+//
+// Cada subtarefa é uma função registrada pelo programa (register_task) e recebe
+// CÓPIAS dos valores que usa, como um processo independente: a comunicação com
+// o programa principal é só pelo valor devolvido (join) ou por canais.
 // ----------------------------------------------------------------------------
+using TaskFn = std::function<Value(Args&)>;
+
+inline std::map<std::string, TaskFn>& task_registry() {
+    static std::map<std::string, TaskFn> r;
+    return r;
+}
+
+inline void register_task(const std::string& id, TaskFn fn) { task_registry()[id] = std::move(fn); }
+
+inline Value run_registered(const std::string& id, Args& args) {
+    auto it = task_registry().find(id);
+    if (it == task_registry().end())
+        fail("Tarefa desconhecida: '" + id + "' (o programa deste computador é o mesmo código compilado?)");
+    return it->second(args);
+}
+
+// Cópia profunda de listas e objetos (canais são compartilhados, para poder comunicar).
+inline Value copy_for_task(const Value& v, std::unordered_map<const void*, Value>& seen) {
+    if (v.tag == Value::LIST) {
+        auto it = seen.find(v.p.get());
+        if (it != seen.end()) return it->second;
+        Value r = Value::make_list();
+        seen[v.p.get()] = r;
+        r.list().v.reserve(v.list().v.size());
+        for (const auto& item : v.list().v) r.list().v.push_back(copy_for_task(item, seen));
+        return r;
+    }
+    if (v.tag == Value::OBJ) {
+        auto it = seen.find(v.p.get());
+        if (it != seen.end()) return it->second;
+        Value r = Value::make_obj(v.obj().cls);
+        seen[v.p.get()] = r;
+        for (const auto& kv : v.obj().fields) r.obj().fields[kv.first] = copy_for_task(kv.second, seen);
+        return r;
+    }
+    return v;
+}
+
+inline Value copy_for_task(const Value& v) {
+    std::unordered_map<const void*, Value> seen;
+    return copy_for_task(v, seen);
+}
+
 inline void report_task_error(const std::string& name, const std::exception& e) {
     std::lock_guard<std::mutex> lock(io_mutex());
     std::fflush(stdout);
@@ -1101,20 +1176,24 @@ inline void pin_to_core(int core, const std::string& task) {
 #endif
 }
 
-inline void run_task(const std::string& name, int core, const std::function<void()>& fn) {
+inline Value run_task(const std::string& name, int core, const std::function<Value()>& fn) {
     try {
         pin_to_core(core, name);
-        fn();
+        return fn();
     } catch (const std::exception& e) {
         report_task_error(name, e);
+        return Value();
     }
 }
 
+// par { ... }: uma thread por comando; o join é feito ao final do bloco.
 class TaskGroup {
     std::vector<std::thread> threads_;
 public:
-    void spawn(const std::string& name, int core, std::function<void()> fn) {
-        threads_.emplace_back([name, core, fn]() { run_task(name, core, fn); });
+    void spawn(const std::string& name, int core, const std::string& id, Args args) {
+        threads_.emplace_back([name, core, id, args]() mutable {
+            run_task(name, core, [&]() { return run_registered(id, args); });
+        });
     }
     void join() {
         for (auto& t : threads_)
@@ -1124,44 +1203,137 @@ public:
     ~TaskGroup() { join(); }
 };
 
+// ----------------------------------------------------------------------------
+// Execução remota: o mesmo programa executado com --worker PORTA no outro computador
+// recebe o nome da tarefa e as cópias das variáveis, executa e devolve o resultado.
+// ----------------------------------------------------------------------------
+inline std::string resolve_host(const std::string& h) {
+    auto it = config().hosts.find(h);
+    return it != config().hosts.end() ? it->second : h;
+}
+
+inline Value remote_call(const std::string& name, const Value& host, const Value& port,
+                         const std::string& id, const Args& args) {
+    if (host.tag != Value::STR) fail("fork ... on host exige o endereço do computador como string");
+    int p = port.tag == Value::NUM ? static_cast<int>(port.n) : 9000;
+    std::string h = resolve_host(host.str());
+    std::string payload;
+    Value arglist = Value::make_list();
+    arglist.list().v = args;
+    payload.push_back(4);
+    put_u32(payload, 3);
+    encode(Value("run"), payload);
+    encode(Value(id), payload);
+    encode(arglist, payload);                      // falha aqui se algum valor não for serializável
+
+    sock_t s = tcp_connect(h, p, config().timeout);
+    struct Closer { sock_t s; ~Closer() { close_socket(s); } } closer{s};
+    send_frame(s, payload);
+    std::string resp = recv_frame(s);
+    size_t pos = 0;
+    Value r = decode(resp, pos);
+    if (r.tag != Value::LIST || r.list().v.size() != 2 || r.list().v[0].tag != Value::STR)
+        fail("Resposta inválida do trabalhador em " + h + ":" + std::to_string(p));
+    if (r.list().v[0].str() != "ok")
+        fail("A tarefa remota '" + name + "' falhou em " + h + ":" + std::to_string(p) + ": " +
+             to_str(r.list().v[1]));
+    return r.list().v[1];
+}
+
+inline void handle_worker_connection(sock_t s) {
+    auto reply = [&](const char* status, const Value& v) {
+        Value msg = Value::make_list();
+        msg.list().v.push_back(Value(status));
+        msg.list().v.push_back(v);
+        std::string payload;
+        encode(msg, payload);
+        send_frame(s, payload);
+    };
+    try {
+        std::string payload = recv_frame(s);
+        size_t pos = 0;
+        Value req = decode(payload, pos);
+        if (req.tag != Value::LIST || req.list().v.size() != 3 || !req.list().v[0].is_str() ||
+            req.list().v[0].str() != "run" || !req.list().v[1].is_str() || !req.list().v[2].is_list())
+            fail("Pedido inválido");
+        std::string id = req.list().v[1].str();
+        Args args = req.list().v[2].list().v;
+        Value result = run_registered(id, args);
+        reply("ok", result);
+    } catch (const std::exception& e) {
+        try { reply("erro", Value(std::string(e.what()))); } catch (...) {}
+    }
+    close_socket(s);
+}
+
+// Modo trabalhador: atende pedidos de execução de tarefas.
+inline void serve_worker(int port, int max_tasks) {
+    sock_t ls = open_listener(port);
+    net_log("trabalhador aguardando tarefas na porta " + std::to_string(port) + " ...");
+    std::vector<std::thread> handlers;
+    int served = 0;
+    while (max_tasks <= 0 || served < max_tasks) {
+        sock_t c = ::accept(ls, nullptr, nullptr);
+        if (c == BAD_SOCK) continue;
+        set_nodelay(c);
+        ++served;
+        handlers.emplace_back(handle_worker_connection, c);
+    }
+    for (auto& t : handlers) t.join();
+    close_socket(ls);
+}
+
+// fork nome [on core N | on host H, P] { ... }: threads nomeadas, com resultado (join).
 class ForkTable {
-    std::map<std::string, std::thread> threads_;
+    struct Entry {
+        std::thread th;
+        Value result;
+    };
+    std::map<std::string, std::unique_ptr<Entry>> tasks_;
+
     void reap(const std::string& name) {
-        auto it = threads_.find(name);
-        if (it != threads_.end() && it->second.joinable()) it->second.join();
+        auto it = tasks_.find(name);
+        if (it == tasks_.end()) return;
+        if (it->second->th.joinable()) it->second->th.join();
+        tasks_.erase(it);
     }
 public:
-    void spawn(const std::string& name, const Value& core, std::function<void()> fn) {
-        int c = -1;
-        if (core.tag == Value::NUM) c = static_cast<int>(core.n);
+    void spawn(const std::string& name, const Value& core, const std::string& id, Args args) {
+        int c = core.tag == Value::NUM ? static_cast<int>(core.n) : -1;
         reap(name);
-        threads_[name] = std::thread([name, c, fn]() { run_task(name, c, fn); });
+        auto e = std::make_unique<Entry>();
+        Entry* raw = e.get();
+        raw->th = std::thread([raw, name, c, id, args]() mutable {
+            raw->result = run_task(name, c, [&]() { return run_registered(id, args); });
+        });
+        tasks_[name] = std::move(e);
     }
-    void spawn_local(const std::string& name, std::function<void()> fn) {
-        spawn(name, Value(), std::move(fn));
-    }
-    // Execução em outro computador: implementada na Etapa 8 (por enquanto, local).
     void spawn_host(const std::string& name, const Value& host, const Value& port,
-                    std::function<void()> fn) {
-        {
-            std::lock_guard<std::mutex> lock(io_mutex());
-            std::fprintf(stderr, "Aviso: 'fork %s on host %s' ainda executa localmente "
-                                 "(execução remota na Etapa 8)\n",
-                         name.c_str(), to_str(host).c_str());
-        }
-        (void)port;
-        spawn(name, Value(), std::move(fn));
+                    const std::string& id, Args args) {
+        reap(name);
+        auto e = std::make_unique<Entry>();
+        Entry* raw = e.get();
+        raw->th = std::thread([raw, name, host, port, id, args]() {
+            raw->result = run_task(name, -1, [&]() { return remote_call(name, host, port, id, args); });
+        });
+        tasks_[name] = std::move(e);
     }
     void join(std::initializer_list<const char*> names) {
         for (const char* n : names) {
-            auto it = threads_.find(n);
-            if (it == threads_.end()) fail(std::string("join de subtarefa desconhecida: ") + n);
-            if (it->second.joinable()) it->second.join();
+            auto it = tasks_.find(n);
+            if (it == tasks_.end()) fail(std::string("join de subtarefa desconhecida: ") + n);
+            if (it->second->th.joinable()) it->second->th.join();
         }
     }
+    Value join_value(const char* name) {
+        auto it = tasks_.find(name);
+        if (it == tasks_.end()) fail(std::string("join de subtarefa desconhecida: ") + name);
+        if (it->second->th.joinable()) it->second->th.join();
+        return it->second->result;
+    }
     void join_all() {
-        for (auto& kv : threads_)
-            if (kv.second.joinable()) kv.second.join();
+        for (auto& kv : tasks_)
+            if (kv.second->th.joinable()) kv.second->th.join();
     }
     ~ForkTable() { join_all(); }
 };
@@ -1192,14 +1364,20 @@ inline bool parse_args(int argc, char** argv, std::string& hosts_file) {
             return false;
         };
         if (a == "--help" || a == "-h") {
-            std::printf("Uso: %s [--node NOME] [--hosts ARQUIVO]\n"
-                        "  --node NOME      quem este programa é (ex.: computador_1)\n"
-                        "  --hosts ARQUIVO  endereços dos computadores (padrão: minipar.hosts)\n",
+            std::printf("Uso: %s [--node NOME] [--hosts ARQUIVO] [--worker PORTA [--worker-tasks N]]\n"
+                        "  --node NOME        quem este programa é (ex.: computador_1)\n"
+                        "  --hosts ARQUIVO    endereços dos computadores (padrão: minipar.hosts)\n"
+                        "  --worker PORTA     modo trabalhador: executa tarefas enviadas por\n"
+                        "                     'fork ... on host' de outro computador\n"
+                        "  --worker-tasks N   o trabalhador encerra depois de N tarefas (padrão: sempre)\n",
                         argv[0]);
             return false;
         }
+        std::string tmp;
         if (value_of("--node", config().node)) continue;
         if (value_of("--hosts", hosts_file)) continue;
+        if (value_of("--worker", tmp)) { config().worker_port = std::atoi(tmp.c_str()); continue; }
+        if (value_of("--worker-tasks", tmp)) { config().worker_tasks = std::atoi(tmp.c_str()); continue; }
     }
     return true;
 }
@@ -1218,7 +1396,8 @@ inline int run_program(int argc, char** argv, const std::function<void()>& init,
         if (!hosts_file.empty()) load_hosts_file(hosts_file, true);
         else load_hosts_file("minipar.hosts", false);
         init();
-        entry();
+        if (config().worker_port > 0) serve_worker(config().worker_port, config().worker_tasks);
+        else entry();
     } catch (const std::exception& e) {
         std::fflush(stdout);
         std::fprintf(stderr, "Erro de execução: %s\n", e.what());

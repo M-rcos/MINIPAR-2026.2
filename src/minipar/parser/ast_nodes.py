@@ -276,6 +276,12 @@ class ListLiteral(Expr):
 
 
 @dataclass(eq=False)
+class JoinExpr(Expr):
+    """join nome: espera a subtarefa (fork) e devolve o valor do seu return."""
+    name: str
+
+
+@dataclass(eq=False)
 class MatrixExpr(Expr):
     rows: Expr
     cols: Expr

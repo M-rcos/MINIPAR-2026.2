@@ -181,17 +181,84 @@ class TestOO(unittest.TestCase):
 
 class TestParalelismoECanais(unittest.TestCase):
     def test_par(self):
-        out = lines("par { print(1); print(2); }")
-        self.assertEqual(out, ["par_begin", "task par1_t1", "print 1", "end_task",
-                               "task par1_t2", "print 2", "end_task", "par_end"])
+        prog = gen("par { print(1); print(2); }")
+        out = [str(i) for i in prog.function("main").instrs][:-1]
+        self.assertEqual(out, ["par_begin", "task par1_t1 -> main$par1_t1()",
+                               "task par1_t2 -> main$par1_t2()", "par_end"])
+        t = prog.function("main$par1_t1")
+        self.assertTrue(t.is_task)
+        self.assertEqual([str(i) for i in t.instrs], ["print 1", "return"])
 
     def test_fork_join(self):
         out = lines('fork a on core 1 { print(1); } fork b on host "10.0.0.2", 9000 { print(2); }'
                     "fork c { print(3); } join a, b; join;")
         self.assertEqual(out, [
-            "fork a on core 1", "print 1", "end_task",
-            'fork b on host "10.0.0.2", 9000', "print 2", "end_task",
-            "fork c", "print 3", "end_task", "join a, b", "join"])
+            "fork a on core 1 -> main$a()",
+            'fork b on host "10.0.0.2", 9000 -> main$b()',
+            "fork c -> main$c()", "join a, b", "join"])
+
+    def test_tarefa_recebe_apenas_as_variaveis_que_usa(self):
+        prog = gen("""
+            var g = 7;
+            func f() {
+                var a = 1; var b = 2; var nao_usada = 3;
+                fork t { var interna = a + g; return interna * b; }
+                return join t;
+            }
+            print(f());
+        """)
+        t = prog.function("f$t")
+        self.assertEqual(t.params, ["a", "b"])            # g é global; interna nasce dentro
+        fork = [i for i in prog.function("f").instrs if i.op == "fork"][0]
+        self.assertEqual(fork.args, ["a", "b"])
+        self.assertNotIn("nao_usada", t.params)
+
+    def test_tarefa_em_metodo_captura_this(self):
+        prog = gen("""
+            class A { var v = 4;
+                func f() { fork t { return this.v * 2; } return join t; } }
+            var a = new A(); print(a.f());
+        """)
+        self.assertEqual(prog.function("A.f$t").params, ["this"])
+        self.assertEqual(run("""
+            class A { var v = 4;
+                func f() { fork t { return this.v * 2; } return join t; } }
+            var a = new A(); print(a.f());
+        """), "8")
+
+    def test_join_como_expressao(self):
+        out = lines("fork t { return 5; } var r = join t;")
+        self.assertEqual(out, ["fork t -> main$t()", "r = join t"])
+
+    def test_tarefa_dentro_de_tarefa(self):
+        prog = gen("""
+            func f(n) { fork a { var x = n + 1; fork b { return x * 2; } return join b; }
+                        return join a; }
+            print(f(4));
+        """)
+        self.assertIsNotNone(prog.function("f$a"))
+        self.assertIsNotNone(prog.function("f$b"))
+        self.assertEqual(prog.function("f$a").params, ["n"])
+        self.assertEqual(prog.function("f$b").params, ["x"])
+        self.assertEqual(run("""
+            func f(n) { fork a { var x = n + 1; fork b { return x * 2; } return join b; }
+                        return join a; }
+            print(f(4));
+        """), "10")
+
+    def test_execucao_de_fork_devolvendo_valores(self):
+        src = """
+            func soma(l) { var s = 0; for (var x in l) { s += x; } return s; }
+            func main2() {
+                var a = [1, 2, 3]; var b = [10, 20];
+                fork p on core 0 { return soma(a); }
+                fork q { return soma(b); }
+                par { print(len(a)); }
+                print(join p, join q);
+            }
+            main2();
+        """
+        self.assertEqual(run(src), "3\n6 30")
 
     def test_canal(self):
         prog = gen("c_channel calc c1 c2; calc.send(1, 2); var r = calc.receive(); calc.close();"

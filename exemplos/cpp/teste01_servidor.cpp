@@ -61,12 +61,12 @@ mp::Value fn_main() {
     return mp::Value();
 }
 
-static void register_classes() {
+static void register_all() {
 }
 
 int main(int argc, char** argv) {
     return mp::run_program(argc, argv, []() {
-        register_classes();
+        register_all();
         v_calculadora = mp::make_channel("calculadora", "computador_1", "computador_2");
     }, []() { fn_main(); });
 }

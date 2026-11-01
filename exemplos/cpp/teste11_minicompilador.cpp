@@ -988,7 +988,7 @@ mp::Value fn_main() {
     return mp::Value();
 }
 
-static void register_classes() {
+static void register_all() {
     mp::register_class("Token", "", {
         {"init", [](const mp::Value& self, mp::Args& a) -> mp::Value { mp::check_arity("Token.init", a, 2); return fn_Token_D_init(self, a[0], a[1]); }},
         {"mostrar", [](const mp::Value& self, mp::Args& a) -> mp::Value { mp::check_arity("Token.mostrar", a, 0); return fn_Token_D_mostrar(self); }},
@@ -1017,6 +1017,6 @@ static void register_classes() {
 
 int main(int argc, char** argv) {
     return mp::run_program(argc, argv, []() {
-        register_classes();
+        register_all();
     }, []() { fn_main(); });
 }

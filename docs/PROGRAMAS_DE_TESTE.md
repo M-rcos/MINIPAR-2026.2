@@ -5,13 +5,15 @@ Todos os comandos rodam na pasta do projeto. `make run F=arquivo.mp` compila com
 | Teste | Programa | Situação | Como executar |
 |---|---|---|---|
 | 1 | `teste01_servidor.mp` e `teste01_cliente.mp` | Cliente e servidor se comunicam por sockets em localhost | `make teste1-demo` (ver `docs/CANAIS.md`) |
-| 2 | `teste02_par_fatorial_fibonacci.mp` | Executa em threads | `make run F=exemplos/teste02_par_fatorial_fibonacci.mp` |
+| 2 | `teste02_par_fatorial_fibonacci.mp` e `fork_remoto.mp` | `par` em threads; o `fork_remoto` distribui o trabalho para outro computador | `make run F=exemplos/teste02_par_fatorial_fibonacci.mp` (remoto: ver `docs/FORK_JOIN.md`) |
 | 3 | `teste03_neuronio.mp` | Saída idêntica ao enunciado (51 iterações) | `make run F=exemplos/teste03_neuronio.mp` |
 | 4 | `teste04_rede_xor.mp` | Converge (cerca de 0,3 s com `-O2`) | `python3 -m minipar run exemplos/teste04_rede_xor.mp -O2` |
 | 5 | `teste05_recomendacao.mp` | Saída idêntica ao enunciado | `make run F=exemplos/teste05_recomendacao.mp` |
 | 6 | `teste06_quicksort_recursivo.mp` | Saída idêntica ao enunciado, com validação da entrada | `echo "10 -3 -40 80 70 -100" \| python3 -m minipar run exemplos/teste06_quicksort_recursivo.mp` |
 | 7 | `teste07_quicksort_iterativo.mp` | Saída idêntica ao enunciado; TAC em `exemplos/tac/` | `make run F=exemplos/teste07_quicksort_iterativo.mp` |
-| 8, 9, 10 | (a escrever) | Etapa 8 (fork/join em núcleos) | |
+| 8 | `teste08_avaliacao_4nucleos.mp` | 160 atividades em 4 núcleos (fork/join) | `python3 mp.py run exemplos/teste08_avaliacao_4nucleos.mp -O2` |
+| 9 | `teste09_5nucleos_fractal.mp` | 5 núcleos; Mandelbrot idêntico ao do Python | `python3 mp.py run exemplos/teste09_5nucleos_fractal.mp -O2` |
+| 10 | `teste10_6nucleos_2fractais.mp` | 6 núcleos; Sierpinski vira `sierpinski.svg` | `python3 mp.py run exemplos/teste10_6nucleos_2fractais.mp -O2` |
 | 11 | `teste11_minicompilador.mp` | Saída idêntica ao enunciado; gera o `.arm` | veja abaixo |
 
 ## Teste 4: observações
@@ -41,4 +43,4 @@ Limites herdados do programa original em Java: a divisão não gera instrução 
 
 ## Testes automatizados
 
-`make test` executa tudo (229 testes, cerca de 50 s). Os testes de `tests/test_programas.py` compilam cada programa com o g++ e comparam a saída com a do enunciado.
+`make test` executa tudo (cerca de 270 testes, em torno de 2 minutos). Os testes de `tests/test_programas.py` compilam cada programa com o g++ e comparam a saída com a do enunciado.

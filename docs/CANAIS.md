@@ -29,11 +29,11 @@ Dois terminais, na pasta do projeto:
 
 ```
 # terminal 1 (servidor)
-python3 minipar.py build exemplos/teste01_servidor.mp
+python3 mp.py build exemplos/teste01_servidor.mp
 ./build/teste01_servidor --node computador_2
 
 # terminal 2 (cliente)
-python3 minipar.py build exemplos/teste01_cliente.mp
+python3 mp.py build exemplos/teste01_cliente.mp
 ./build/teste01_cliente --node computador_1
 ```
 

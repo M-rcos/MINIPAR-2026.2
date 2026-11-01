@@ -37,7 +37,7 @@ Windows: instale o Python 3 e o MSYS2 (https://www.msys2.org), depois
     make cpp F=exemplos/teste03_neuronio.mp                      # código C++
     make run F=exemplos/teste03_neuronio.mp                      # compila com o GCC e executa
     make teste1-demo                                             # calculadora cliente/servidor (sockets)
-    python3 minipar.py run exemplos/teste03_neuronio.mp          # atalho que dispensa PYTHONPATH (Windows também)
+    python3 mp.py run exemplos/teste03_neuronio.mp          # atalho que dispensa PYTHONPATH (Windows também)
     python3 -m minipar build programa.mp -O2                     # gera o executável em build/
     PYTHONPATH=src python3 -m minipar tokens arquivo.mp --json
     PYTHONPATH=src python3 -m minipar ast arquivo.mp --json
@@ -51,4 +51,4 @@ Windows: instale o Python 3 e o MSYS2 (https://www.msys2.org), depois
 - [x] Etapa 5: gerador C++ e integração com GCC
 - [x] Etapa 6: testes 4, 5, 6 e 11 (redes neurais, quicksort recursivo, minicompilador); ver docs/PROGRAMAS_DE_TESTE.md
 - [x] Etapa 7: canais com sockets (Teste 1); ver docs/CANAIS.md
-- [ ] Etapa 8: fork/join em núcleos e em outro computador (Testes 8, 9 e 10)
+- [x] Etapa 8: fork/join em núcleos e em outro computador (Testes 8, 9 e 10); ver docs/FORK_JOIN.md

@@ -2,7 +2,7 @@
 PY ?= python3
 export PYTHONPATH := src
 
-.PHONY: test test-rapido tokens ast check tac cpp build run teste1-servidor teste1-cliente teste1-demo clean
+.PHONY: teste8 teste9 teste10 test test-rapido tokens ast check tac cpp build run teste1-servidor teste1-cliente teste1-demo clean
 
 test:
 	$(PY) -m unittest discover -s tests -v
@@ -38,6 +38,14 @@ build:
 # uso: make run F=exemplos/teste03_neuronio.mp
 run:
 	$(PY) -m minipar run $(F)
+
+# Testes 8, 9 e 10 (fork/join em 4, 5 e 6 núcleos)
+teste8:
+	$(PY) -m minipar run exemplos/teste08_avaliacao_4nucleos.mp -O2
+teste9:
+	$(PY) -m minipar run exemplos/teste09_5nucleos_fractal.mp -O2
+teste10:
+	$(PY) -m minipar run exemplos/teste10_6nucleos_2fractais.mp -O2
 
 # Teste 1 (calculadora cliente/servidor): em dois terminais, ou tudo de uma vez com teste1-demo
 teste1-servidor:

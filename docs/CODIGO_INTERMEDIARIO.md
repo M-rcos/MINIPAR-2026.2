@@ -30,9 +30,10 @@ Variáveis (`x`), temporários (`t0`, `t1`, ...), números (`42`, `-3`, `0.5`), 
 | `x = new_matrix r, c, v` | matriz |
 | `print a, b, ...` | saída; `x = input [prompt]` lê uma linha |
 | `x = new_channel h, p`, `send ch, a, ...`, `x = receive ch`, `close ch` | canais |
-| `par_begin` / `task nome` ... `end_task` / `par_end` | bloco paralelo, uma tarefa por comando filho; `par_end` faz o join |
-| `fork nome [on core N \| on host H, P]` ... `end_task` | subtarefa independente |
+| `par_begin` / `task nome -> f(a, b)` / `par_end` | bloco paralelo: cada comando filho vira a função `f`, chamada em uma thread com cópias de `a` e `b`; `par_end` faz o join |
+| `fork nome [on core N \| on host H, P] -> f(a, b)` | subtarefa independente: executa a função `f` (local, em um núcleo ou em outro computador) |
 | `join [nome, ...]` | espera subtarefas (sem nomes: todas) |
+| `x = join nome` | espera a subtarefa e recebe o valor do seu `return` |
 
 ## Estrutura da saída
 
@@ -52,7 +53,7 @@ func Classe.__attrs(this):        inicializa os atributos da classe (chama o da 
 * **Nomes únicos.** Variáveis de mesmo nome em escopos diferentes viram `x`, `x_1`, ... Um nome de usuário parecido com temporário (`t0`) vira `t0_v`.
 * **Objetos.** `new C(args)` gera `new C`, chama `C.__attrs` e depois o construtor `init` (da própria classe ou herdado).
 * **Laços.** `break` e `continue` desviam para os rótulos `endwhile`/`forstep` etc. O `for ... in` percorre por índice usando `size`.
-* **Paralelismo.** As regiões `task`/`fork` são preservadas no TAC; o gerador de C++ (próxima etapa) as converte em threads, núcleos ou processos remotos.
+* **Paralelismo.** O corpo de cada `par`/`fork` vira uma função própria (`main$professor`), cujos parâmetros são as variáveis locais que o corpo usa (cópias). O gerador de C++ transforma a chamada em thread local, thread fixada em um núcleo ou chamada ao trabalhador de outro computador. Ver `docs/FORK_JOIN.md`.
 
 ## Exemplo (Teste 7: quicksort não recursivo)
 

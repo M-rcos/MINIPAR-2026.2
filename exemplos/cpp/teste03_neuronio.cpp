@@ -117,7 +117,7 @@ mp::Value fn_main() {
     return mp::Value();
 }
 
-static void register_classes() {
+static void register_all() {
     mp::register_class("Neuronio", "", {
         {"init", [](const mp::Value& self, mp::Args& a) -> mp::Value { mp::check_arity("Neuronio.init", a, 2); return fn_Neuronio_D_init(self, a[0], a[1]); }},
         {"ativacao", [](const mp::Value& self, mp::Args& a) -> mp::Value { mp::check_arity("Neuronio.ativacao", a, 1); return fn_Neuronio_D_ativacao(self, a[0]); }},
@@ -127,6 +127,6 @@ static void register_classes() {
 
 int main(int argc, char** argv) {
     return mp::run_program(argc, argv, []() {
-        register_classes();
+        register_all();
     }, []() { fn_main(); });
 }

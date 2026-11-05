@@ -190,7 +190,7 @@ class TestEco(BaseCanais):
             cli = self.iniciar("cliente", *cli_args)
         else:
             cli = self.iniciar("cliente", *cli_args)
-            time.sleep(1.0)
+            time.sleep(2.5)
             srv = self.iniciar("servidor", *srv_args)
         return self.terminar(cli), self.terminar(srv)
 

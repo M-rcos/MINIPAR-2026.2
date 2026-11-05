@@ -1,6 +1,6 @@
 # Gramática Formal BNF da Linguagem MiniPar 2026.2
 
-Base: gramática MiniPar 2026.1 (obrigatória, conforme o enunciado), revisada e
+Base: gramática MiniPar 2026.1, revisada e
 ampliada para atender aos Programas de Teste 1 a 11 da versão 2026.2.
 
 ## 1. Notação
@@ -241,9 +241,3 @@ ampliada para atender aos Programas de Teste 1 a 11 da versão 2026.2.
 
 Métodos nativos: `lista.append(v)`, `lista.push_back(v)`, `lista.pop()`, `lista.size()`,
 `string.size()`, `canal.send(a, ...)`, `canal.receive()`, `canal.close()`.
-
-## 7. Decisões que vale confirmar com o professor
-
-1. Construtor com o nome `init` (alternativa: método com o mesmo nome da classe).
-2. Como cada processo sabe se é `computador_1` ou `computador_2`: implementado com a opção `--node` na execução e o arquivo `minipar.hosts` para os endereços.
-3. Formato de `fork ... on host`: implementado com um processo trabalhador (`--worker`) rodando no outro computador (ver `docs/FORK_JOIN.md`).

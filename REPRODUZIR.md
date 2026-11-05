@@ -23,3 +23,9 @@ No terminal (CMD ou PowerShell no Windows, Bash no Linux):
 Para executar a bateria completa de 262 testes automatizados:
 
 py run_tests.py
+(ou no Linux: python run_tests.py)
+
+Resultado esperado:
+Ran 262 tests in ~245s
+
+OK

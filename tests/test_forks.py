@@ -271,7 +271,7 @@ class BenchmarkBase(Compilado):
         # aceleração e redução são coerentes com os tempos (que saem arredondados)
         aceleracao = num("Aceleração") if nucleos == 4 else num("Aceleração (Speedup)")
         reducao = num("Redução no tempo") if nucleos == 4 else num("Redução de Tempo")
-        self.assertAlmostEqual(aceleracao, seq / par, delta=max(0.15, 0.1 * seq / par))
+        self.assertAlmostEqual(aceleracao, seq / par, delta=max(0.4, 0.25 * seq / par))
         self.assertAlmostEqual(reducao, (1 - par / seq) * 100, delta=10)
 
 

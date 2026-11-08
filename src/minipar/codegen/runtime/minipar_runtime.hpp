@@ -560,7 +560,7 @@ inline sock_t tcp_connect(const std::string& host, int port, double timeout) {
     while (true) {
         addrinfo hints;
         std::memset(&hints, 0, sizeof hints);
-        hints.ai_family = AF_UNSPEC;
+        hints.ai_family = AF_INET;
         hints.ai_socktype = SOCK_STREAM;
         addrinfo* res = nullptr;
         std::string service = std::to_string(port);
